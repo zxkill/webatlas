@@ -2,54 +2,32 @@ from __future__ import annotations
 
 import asyncio
 import json
-from urllib.parse import urlparse, urlunparse
+import logging
+from typing import Optional
+from urllib.parse import urlunparse
 import aiohttp
-import tldextract
 
 from .config import AppConfig
-from .db import Database, CheckRow
+from .db import Database, CheckRow, AdminPanelRow
 from .http import HttpClient
 from .bitrix import decode_html, score_bitrix, classify
 
 
-def normalize_domain(raw: str) -> str | None:
-    raw = (raw or "").strip().lower()
-    if not raw or raw.startswith("#"):
-        return None
-
-    if "://" in raw:
-        p = urlparse(raw)
-        candidate = p.netloc or p.path
-    else:
-        candidate = raw
-
-    candidate = candidate.split("@")[-1].split(":")[0].strip()
-    ext = tldextract.extract(candidate)
-    if not ext.domain or not ext.suffix:
-        return None
-
-    return ".".join(part for part in [ext.subdomain, ext.domain, ext.suffix] if part)
+logger = logging.getLogger(__name__)
 
 
 def ensure_url(scheme: str, domain: str, path: str) -> str:
+    # Универсальный сборщик URL: не допускаем “лишних” параметров и фрагментов.
     return urlunparse((scheme, domain, path, "", "", ""))
-
-
-def load_allowlist(path: str) -> set[str]:
-    allowed: set[str] = set()
-    for line in open(path, "r", encoding="utf-8"):
-        d = normalize_domain(line)
-        if d:
-            allowed.add(d)
-    return allowed
 
 
 class Auditor:
     """
-    Аудит доменов только по allowlist (разрешённые цели):
+    Базовый аудит доменов:
     - проверка главной страницы (https/http)
-    - верификация Bitrix по сигнатурам (cookies/html)
+    - классификация Bitrix по сигнатурам (cookies/html)
     - при уверенном "yes" — проверка /bitrix/admin/ (без логина)
+    В дальнейшем здесь будут подключаться дополнительные проверки под разные CMS/фреймворки.
     """
 
     def __init__(self, cfg: AppConfig) -> None:
@@ -64,7 +42,7 @@ class Auditor:
 
         if not targets:
             db.close()
-            raise SystemExit("Нет доменов с is_allowed=1. Пометьте домены в SQLite и повторите запуск.")
+            raise SystemExit("Нет доменов для аудита. Сначала импортируйте список доменов.")
 
         http = HttpClient(
             rps=self._cfg.rate_limit.rps,
@@ -75,8 +53,23 @@ class Auditor:
         async with aiohttp.ClientSession() as session:
             async def check_one(domain: str) -> None:
                 async with sem:
-                    res = await self._check_domain(session, http, domain)
-                    db.update_check(domain, res)
+                    logger.info("Запуск проверки домена: %s", domain)
+                    check_row, admin_row, cms_row = await self._check_domain(session, http, domain)
+                    db.update_check(domain, "bitrix", check_row, description="Проверка сигнатур Bitrix")
+                    db.update_admin_panel(
+                        domain,
+                        "bitrix_admin",
+                        admin_row,
+                    )
+                    if cms_row is not None:
+                        db.update_domain_cms(
+                            domain,
+                            "bitrix",
+                            "1C-Bitrix",
+                            cms_row["status"],
+                            cms_row["confidence"],
+                            cms_row["evidence_json"],
+                        )
                     db.commit()
 
             tasks = [asyncio.create_task(check_one(d)) for d in targets]
@@ -84,15 +77,28 @@ class Auditor:
             for fut in asyncio.as_completed(tasks):
                 await fut
                 done += 1
-                print(f"[audit] {done}/{len(targets)} done")
+                logger.info("[audit] %s/%s done", done, len(targets))
 
         db.close()
-        print("[audit] completed.")
+        logger.info("[audit] completed.")
 
-    async def _check_domain(self, session: aiohttp.ClientSession, http: HttpClient, domain: str) -> CheckRow:
+    async def _check_domain(
+        self,
+        session: aiohttp.ClientSession,
+        http: HttpClient,
+        domain: str,
+    ) -> tuple[CheckRow, AdminPanelRow, Optional[dict]]:
+        """
+        Выполняет единичную проверку домена и возвращает:
+        - результат проверки CMS (CheckRow),
+        - статус админки (AdminPanelRow),
+        - описание CMS-результата для связанной таблицы (dict | None).
+        """
         evidence: dict = {"domain": domain, "checked": {}}
+        admin_evidence: dict = {"domain": domain, "checked": {}}
+        cms_evidence: dict = {"domain": domain, "checked": {}}
 
-        # 1) GET /
+        # 1) GET / — проверяем доступность домена и собираем сигнатуры.
         homepage = None
         used_scheme = None
         set_cookie_agg = ""
@@ -102,6 +108,7 @@ class Auditor:
             resp = await http.fetch(session, url, allow_redirects=True)
             if resp is None:
                 evidence["checked"][scheme] = {"ok": False}
+                logger.debug("Домен %s недоступен по %s", domain, scheme)
                 continue
 
             evidence["checked"][scheme] = {"ok": True, "status": resp.status, "final_url": resp.final_url}
@@ -115,13 +122,19 @@ class Auditor:
             break
 
         if homepage is None:
-            return CheckRow(
-                bitrix_status="no",
-                bitrix_score=0,
-                bitrix_evidence_json=json.dumps({**evidence, "error": "unreachable"}, ensure_ascii=False),
-                admin_status=None,
-                admin_http_status=None,
-                admin_final_url=None,
+            return (
+                CheckRow(
+                    status="no",
+                    score=0,
+                    evidence_json=json.dumps({**evidence, "error": "unreachable"}, ensure_ascii=False),
+                ),
+                AdminPanelRow(
+                    status=None,
+                    http_status=None,
+                    final_url=None,
+                    evidence_json=json.dumps({**admin_evidence, "error": "unreachable"}, ensure_ascii=False),
+                ),
+                None,
             )
 
         html = decode_html(homepage.body, homepage.charset)
@@ -129,6 +142,8 @@ class Auditor:
         status = classify(score)
         evidence["bitrix"] = {"score": score, **ev}
         evidence["used_url"] = homepage.final_url
+        cms_evidence["bitrix"] = {"score": score, **ev}
+        cms_evidence["used_url"] = homepage.final_url
 
         # 2) /bitrix/admin/ — только при уверенном yes
         admin_status = None
@@ -140,18 +155,38 @@ class Auditor:
             admin_resp = await http.fetch(session, admin_url, allow_redirects=False)
             if admin_resp is None:
                 admin_status = "no"
+                admin_evidence["checked"]["bitrix_admin"] = {"ok": False}
             else:
                 admin_http_status = admin_resp.status
                 admin_final_url = admin_resp.final_url
+                admin_evidence["checked"]["bitrix_admin"] = {
+                    "ok": True,
+                    "status": admin_resp.status,
+                    "final_url": admin_resp.final_url,
+                }
 
                 # “endpoint существует” — когда получаем 200/30x/401/403
                 admin_status = "yes" if admin_resp.status in (200, 301, 302, 401, 403) else "no"
 
-        return CheckRow(
-            bitrix_status=status,
-            bitrix_score=score,
-            bitrix_evidence_json=json.dumps(evidence, ensure_ascii=False),
-            admin_status=admin_status,
-            admin_http_status=admin_http_status,
-            admin_final_url=admin_final_url,
+        cms_row = None
+        if status in ("yes", "maybe"):
+            cms_row = {
+                "status": status,
+                "confidence": score,
+                "evidence_json": json.dumps(cms_evidence, ensure_ascii=False),
+            }
+
+        return (
+            CheckRow(
+                status=status,
+                score=score,
+                evidence_json=json.dumps(evidence, ensure_ascii=False),
+            ),
+            AdminPanelRow(
+                status=admin_status,
+                http_status=admin_http_status,
+                final_url=admin_final_url,
+                evidence_json=json.dumps(admin_evidence, ensure_ascii=False),
+            ),
+            cms_row,
         )
