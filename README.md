@@ -8,7 +8,8 @@ pip install -r requirements.txt
 python scripts/import_db.py
 
 ### 2) Импорт доменов из файла (по одному домену в строке)
-python scripts/import_from_file.py domains.txt
+Файл задаётся один раз в `config.yaml` в параметре `import.file_path`.
+python scripts/import_from_file.py
 
 ### 3) Аудит доменов (базовая проверка Bitrix как одна из множества будущих проверок)
 python scripts/audit_allowlist.py

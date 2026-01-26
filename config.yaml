@@ -8,6 +8,7 @@ import:
   api_url_template: "https://api.2ip.io/cms/bitrix/ru?page={page}&token={token}"
   token: "o0pi7zyk6tp3bqmh"
   max_domains: 1000000
+  file_path: "domains.txt"
 
 audit:
   concurrency: 6                    # параллельность
