@@ -174,8 +174,7 @@ def create_db_state(database_url: str) -> DbState:
     Держим параметры централизованно, чтобы в дальнейшем было проще масштабировать проект.
     """
 
-    connect_args = {"check_same_thread": False} if database_url.startswith("sqlite") else {}
-    engine = create_engine(database_url, future=True, connect_args=connect_args)
+    engine = create_engine(database_url, future=True)
     session_factory = sessionmaker(bind=engine, expire_on_commit=False, class_=Session)
     logger.info("Инициализирован движок базы данных: %s", database_url)
     return DbState(engine=engine, session_factory=session_factory)

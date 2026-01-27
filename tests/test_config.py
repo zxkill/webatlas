@@ -9,7 +9,7 @@ def test_load_config_reads_file_path(tmp_path: Path) -> None:
     # Подготавливаем минимальный конфиг для проверки загрузки file_path.
     config_path = tmp_path / "config.yaml"
     config_data = {
-        "db": {"path": "test.sqlite"},
+        "db": {"url": "postgresql+psycopg2://user:pass@localhost:5432/db"},
         "rate_limit": {"rps": 1},
         "import": {
             "api_url_template": "https://example.test?page={page}&token={token}",
@@ -24,3 +24,4 @@ def test_load_config_reads_file_path(tmp_path: Path) -> None:
     # Загружаем конфиг и проверяем, что путь корректно читается.
     cfg = load_config(str(config_path))
     assert cfg.import_cfg.file_path == "domains.txt"
+    assert cfg.db.url.startswith("postgresql")

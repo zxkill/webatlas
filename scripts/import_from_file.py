@@ -12,7 +12,7 @@ def main() -> None:
     # Файл со списком доменов задаётся в конфигурации, чтобы путь был единым.
     file_path = cfg.import_cfg.file_path
     logging.getLogger(__name__).info("Используем файл доменов из конфига: %s", file_path)
-    DomainFileImporter(cfg.db.path).run(file_path, source="file")
+    DomainFileImporter(cfg.db.url).run(file_path, source="file")
 
 
 if __name__ == "__main__":

@@ -24,20 +24,21 @@ class DomainFileImporter:
     Каждая строка файла должна содержать один домен (или URL).
     """
 
-    def __init__(self, db_path: str) -> None:
-        self._db_path = db_path
+    def __init__(self, db_url: str) -> None:
+        self._db_url = db_url
 
     def run(self, path: str, source: str = "file") -> FileImportStats:
         """
         Загружает домены из файла, нормализует и сохраняет в БД.
         Возвращает подробную статистику импорта.
         """
+
         logger.info("Импорт доменов из файла: %s", path)
         domains = load_domains_from_file(path)
         unique_domains = set(domains)
         logger.info("Найдено доменов: всего=%s, уникальных=%s", len(domains), len(unique_domains))
 
-        db = Database(self._db_path)
+        db = Database(self._db_url)
         inserted = 0
         for domain in unique_domains:
             db.upsert_domain(domain, source=source)
@@ -67,5 +68,6 @@ def _count_lines(path: str) -> int:
     """
     Вспомогательная функция: количество строк в файле, чтобы вести статистику.
     """
+
     with open(path, "r", encoding="utf-8") as handle:
         return sum(1 for _ in handle)

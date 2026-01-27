@@ -7,7 +7,7 @@ import yaml
 
 @dataclass(frozen=True)
 class DbConfig:
-    path: str
+    url: str
 
 
 @dataclass(frozen=True)
@@ -47,10 +47,11 @@ def load_config(path: str = "config.yaml") -> AppConfig:
     Загружает конфигурацию из YAML. Все параметры берём только из конфига,
     чтобы запуск был одинаковым и воспроизводимым.
     """
+
     data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
 
     return AppConfig(
-        db=DbConfig(path=data["db"]["path"]),
+        db=DbConfig(url=data["db"]["url"]),
         rate_limit=RateLimitConfig(rps=float(data["rate_limit"]["rps"])),
         import_cfg=ImportConfig(
             api_url_template=data["import"]["api_url_template"],

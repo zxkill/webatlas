@@ -37,7 +37,7 @@ class Auditor:
         asyncio.run(self._run_async())
 
     async def _run_async(self) -> None:
-        db = Database(self._cfg.db.path)
+        db = Database(self._cfg.db.url)
         targets = db.load_domains()
 
         if not targets:
