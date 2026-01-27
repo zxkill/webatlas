@@ -18,6 +18,14 @@ def test_load_config_reads_file_path(tmp_path: Path) -> None:
             "file_path": "domains.txt",
         },
         "audit": {"concurrency": 1, "timeouts": {"total": 5}},
+        "scan": {
+            "concurrency": 1,
+            "request_limit": 10,
+            "redirects_limit": 5,
+            "tls_expiring_days": 30,
+            "common_paths": ["/admin"],
+            "ports": {"list": [80, 443], "timeout_s": 1.0, "concurrency": 5},
+        },
     }
     config_path.write_text(yaml.safe_dump(config_data), encoding="utf-8")
 

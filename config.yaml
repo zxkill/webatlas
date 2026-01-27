@@ -14,3 +14,34 @@ audit:
   concurrency: 6                    # параллельность
   timeouts:
     total: 10                       # секунд, общий таймаут на запрос
+
+scan:
+  concurrency: 4                    # параллельность сканирования доменов
+  request_limit: 120                # лимит запросов на домен (безопасный)
+  redirects_limit: 10               # максимальное число редиректов
+  tls_expiring_days: 30             # сколько дней до истечения TLS считать критичным
+  common_paths:
+    - "/admin"
+    - "/wp-admin"
+    - "/administrator"
+    - "/user/login"
+    - "/login"
+    - "/panel"
+    - "/.env"
+    - "/env"
+    - "/phpinfo.php"
+    - "/info.php"
+    - "/server-status"
+    - "/server-info"
+    - "/debug"
+    - "/swagger"
+    - "/openapi.json"
+    - "/api-docs"
+    - "/robots.txt"
+    - "/sitemap.xml"
+    - "/.git/HEAD"
+    - "/backup.zip"
+  ports:
+    list: [80, 443, 8080, 8443, 22, 21, 25, 110, 143, 3306, 5432, 6379, 27017]
+    timeout_s: 1.2
+    concurrency: 50

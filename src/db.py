@@ -87,6 +87,32 @@ CREATE TABLE IF NOT EXISTS domain_vulnerabilities (
 CREATE INDEX IF NOT EXISTS idx_domains_domain ON domains(domain);
 CREATE INDEX IF NOT EXISTS idx_domain_checks_status ON domain_checks(status);
 CREATE INDEX IF NOT EXISTS idx_domain_admin_panels_status ON admin_panels(status);
+
+CREATE TABLE IF NOT EXISTS scan_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    domain_id INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    started_ts INTEGER NOT NULL,
+    finished_ts INTEGER DEFAULT NULL,
+    risk_score INTEGER DEFAULT 0,
+    summary_json TEXT DEFAULT NULL,
+    FOREIGN KEY (domain_id) REFERENCES domains(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS scan_findings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    scan_run_id INTEGER NOT NULL,
+    category TEXT NOT NULL,
+    finding_key TEXT NOT NULL,
+    severity TEXT NOT NULL,
+    description TEXT NOT NULL,
+    evidence_json TEXT DEFAULT NULL,
+    FOREIGN KEY (scan_run_id) REFERENCES scan_runs(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_scan_runs_domain ON scan_runs(domain_id);
+CREATE INDEX IF NOT EXISTS idx_scan_runs_status ON scan_runs(status);
+CREATE INDEX IF NOT EXISTS idx_scan_findings_run ON scan_findings(scan_run_id);
 """
 
 logger = logging.getLogger(__name__)
@@ -181,6 +207,171 @@ class Database:
 
     def commit(self) -> None:
         self._conn.commit()
+
+    def create_scan_run(self, domain: str) -> Optional[int]:
+        """
+        Создаёт запись о запуске сканирования для домена и возвращает id запуска.
+        """
+        domain_id = self._get_domain_id(domain)
+        if domain_id is None:
+            logger.warning("Домен не найден при создании ScanRun: %s", domain)
+            return None
+
+        ts = int(time.time())
+        cur = self._conn.execute(
+            """
+            INSERT INTO scan_runs(domain_id, status, started_ts)
+            VALUES(?, ?, ?)
+            """,
+            (domain_id, "running", ts),
+        )
+        return int(cur.lastrowid)
+
+    def finish_scan_run(self, scan_run_id: int, status: str, risk_score: int, summary_json: str) -> None:
+        """
+        Завершает ScanRun, фиксируя финальный статус, риск и сводку.
+        """
+        self._conn.execute(
+            """
+            UPDATE scan_runs
+            SET status=?, finished_ts=?, risk_score=?, summary_json=?
+            WHERE id=?
+            """,
+            (status, int(time.time()), risk_score, summary_json, scan_run_id),
+        )
+
+    def add_scan_finding(
+        self,
+        scan_run_id: int,
+        category: str,
+        finding_key: str,
+        severity: str,
+        description: str,
+        evidence_json: str,
+    ) -> None:
+        """
+        Добавляет единичную находку (finding) в рамках запуска сканирования.
+        """
+        self._conn.execute(
+            """
+            INSERT INTO scan_findings(scan_run_id, category, finding_key, severity, description, evidence_json)
+            VALUES(?, ?, ?, ?, ?, ?)
+            """,
+            (scan_run_id, category, finding_key, severity, description, evidence_json),
+        )
+
+    def list_scan_runs(self, domain: str | None = None, limit: int = 50) -> list[dict]:
+        """
+        Возвращает историю запусков ScanRun с привязкой к домену.
+        """
+        if domain:
+            cur = self._conn.execute(
+                """
+                SELECT scan_runs.id, domains.domain, scan_runs.status, scan_runs.started_ts,
+                       scan_runs.finished_ts, scan_runs.risk_score, scan_runs.summary_json
+                FROM scan_runs
+                JOIN domains ON domains.id = scan_runs.domain_id
+                WHERE domains.domain=?
+                ORDER BY scan_runs.started_ts DESC
+                LIMIT ?
+                """,
+                (domain, limit),
+            )
+        else:
+            cur = self._conn.execute(
+                """
+                SELECT scan_runs.id, domains.domain, scan_runs.status, scan_runs.started_ts,
+                       scan_runs.finished_ts, scan_runs.risk_score, scan_runs.summary_json
+                FROM scan_runs
+                JOIN domains ON domains.id = scan_runs.domain_id
+                ORDER BY scan_runs.started_ts DESC
+                LIMIT ?
+                """,
+                (limit,),
+            )
+        rows = []
+        for row in cur.fetchall():
+            rows.append(
+                {
+                    "id": row[0],
+                    "domain": row[1],
+                    "status": row[2],
+                    "started_ts": row[3],
+                    "finished_ts": row[4],
+                    "risk_score": row[5],
+                    "summary_json": row[6],
+                }
+            )
+        return rows
+
+    def get_scan_report(self, scan_run_id: int) -> Optional[dict]:
+        """
+        Возвращает отчёт по конкретному запуску (ScanRun) вместе с findings.
+        """
+        cur = self._conn.execute(
+            """
+            SELECT scan_runs.id, domains.domain, scan_runs.status, scan_runs.started_ts,
+                   scan_runs.finished_ts, scan_runs.risk_score, scan_runs.summary_json
+            FROM scan_runs
+            JOIN domains ON domains.id = scan_runs.domain_id
+            WHERE scan_runs.id=?
+            """,
+            (scan_run_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+
+        findings_cur = self._conn.execute(
+            """
+            SELECT category, finding_key, severity, description, evidence_json
+            FROM scan_findings
+            WHERE scan_run_id=?
+            ORDER BY id
+            """,
+            (scan_run_id,),
+        )
+        findings = []
+        for finding in findings_cur.fetchall():
+            findings.append(
+                {
+                    "category": finding[0],
+                    "key": finding[1],
+                    "severity": finding[2],
+                    "description": finding[3],
+                    "evidence_json": finding[4],
+                }
+            )
+        return {
+            "id": row[0],
+            "domain": row[1],
+            "status": row[2],
+            "started_ts": row[3],
+            "finished_ts": row[4],
+            "risk_score": row[5],
+            "summary_json": row[6],
+            "findings": findings,
+        }
+
+    def get_latest_scan_report(self, domain: str) -> Optional[dict]:
+        """
+        Возвращает последний отчёт по домену.
+        """
+        cur = self._conn.execute(
+            """
+            SELECT scan_runs.id
+            FROM scan_runs
+            JOIN domains ON domains.id = scan_runs.domain_id
+            WHERE domains.domain=?
+            ORDER BY scan_runs.started_ts DESC
+            LIMIT 1
+            """,
+            (domain,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        return self.get_scan_report(int(row[0]))
 
     def update_check(self, domain: str, check_key: str, row: CheckRow, description: str | None = None) -> None:
         """

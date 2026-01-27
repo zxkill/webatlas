@@ -118,7 +118,8 @@ class Auditor:
             # Собираем Set-Cookie “как есть”: серверы часто кладут несколько заголовков.
             # aiohttp в dict не сохраняет множественные значения, поэтому здесь фиксируем минимум.
             # Для сигнатуры BITRIX_SM_* обычно достаточно и одного.
-            set_cookie_agg = resp.headers.get("Set-Cookie", "")
+            # Собираем все Set-Cookie заголовки для сигнатур.
+            set_cookie_agg = "; ".join(resp.set_cookies)
             break
 
         if homepage is None:
