@@ -19,6 +19,7 @@ def normalize_domain(raw: str) -> str | None:
     # Защита от пустых строк и комментариев.
     raw = (raw or "").strip().lower()
     if not raw or raw.startswith("#"):
+        logger.debug("Строка пропущена: пустая или комментарий.")
         return None
 
     # Поддержка форматов: domain.tld, http(s)://domain.tld/path, user:pass@domain.tld:port
@@ -30,11 +31,14 @@ def normalize_domain(raw: str) -> str | None:
 
     # Удаляем возможный логин и порт.
     candidate = candidate.split("@")[-1].split(":")[0].strip()
+    logger.debug("Кандидат домена после очистки: %s", candidate)
     ext = tldextract.extract(candidate)
     if not ext.domain or not ext.suffix:
+        logger.debug("Строка не похожа на домен: %s", raw)
         return None
 
     normalized = ".".join(part for part in [ext.subdomain, ext.domain, ext.suffix] if part)
+    logger.debug("Нормализованный домен: %s", normalized)
     return normalized or None
 
 
@@ -55,4 +59,5 @@ def load_domains_from_file(path: str) -> list[str]:
             logger.debug("Пропущена строка %s (пустая/невалидная/комментарий).", line_number)
             continue
         domains.append(normalized)
+    logger.info("Из файла %s загружено доменов: %s", path, len(domains))
     return domains

@@ -35,12 +35,14 @@ class DomainFileImporter:
 
         logger.info("Импорт доменов из файла: %s", path)
         domains = load_domains_from_file(path)
-        unique_domains = set(domains)
+        # Сохраняем уникальные домены, чтобы избежать повторных вставок.
+        unique_domains = sorted(set(domains))
         logger.info("Найдено доменов: всего=%s, уникальных=%s", len(domains), len(unique_domains))
 
         db = Database(self._db_url)
         inserted = 0
         for domain in unique_domains:
+            # Добавляем домен с привязкой источника импорта.
             db.upsert_domain(domain, source=source)
             inserted += 1
         db.commit()

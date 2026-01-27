@@ -5,6 +5,7 @@ import logging
 from fastapi import FastAPI, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
 
+from src.audit_modules.registry import list_modules
 from src.config import load_config
 from src.webapp_config import load_webapp_config
 from src.webapp_db import create_db_state, get_domain_report, init_db, list_domains
@@ -25,7 +26,26 @@ app_cfg = load_config()
 state = create_db_state(config.database_url)
 init_db(state)
 
-app = FastAPI(title="WebAtlas UI", version="1.1.0")
+app = FastAPI(title="WebAtlas UI", version="1.2.0")
+
+
+def _render_module_checkboxes() -> str:
+    """
+    Формирует HTML с чекбоксами модулей аудита.
+
+    По умолчанию все модули отмечены, чтобы аудит запускался полноценно.
+    """
+
+    items = []
+    for module in list_modules():
+        items.append(
+            "<label>"
+            f"<input type='checkbox' name='modules' value='{module.key}' checked />"
+            f"{module.name}"
+            f"<span class='module-desc'>{module.description}</span>"
+            "</label>"
+        )
+    return "\n".join(items)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -49,6 +69,9 @@ def index() -> str:
         "</tr>"
         for item in domains
     )
+
+    modules_html = _render_module_checkboxes()
+
     return f"""
     <html lang=\"ru\">
       <head>
@@ -62,6 +85,8 @@ def index() -> str:
           .form-row {{ margin-bottom: 16px; }}
           .card {{ border: 1px solid #eee; padding: 16px; margin-bottom: 24px; }}
           .actions {{ display: flex; gap: 16px; flex-wrap: wrap; }}
+          .module-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 8px; }}
+          .module-desc {{ display: block; font-size: 12px; color: #666; }}
         </style>
       </head>
       <body>
@@ -87,14 +112,26 @@ def index() -> str:
               <button type=\"submit\">Импортировать домены из файла</button>
             </form>
             <form method=\"post\" action=\"/admin/audit-all\">
+              <p>Модули аудита (по умолчанию включены все):</p>
+              <div class=\"module-grid\">
+                {modules_html}
+              </div>
               <button type=\"submit\">Аудит всех доменов</button>
             </form>
             <form method=\"post\" action=\"/admin/audit-limit\">
               <input type=\"number\" name=\"limit\" min=\"1\" value=\"50\" required />
+              <p>Модули аудита (по умолчанию включены все):</p>
+              <div class=\"module-grid\">
+                {modules_html}
+              </div>
               <button type=\"submit\">Аудит с лимитом</button>
             </form>
             <form method=\"post\" action=\"/admin/audit-domain\">
               <input type=\"text\" name=\"domain\" placeholder=\"example.com\" required />
+              <p>Модули аудита (по умолчанию включены все):</p>
+              <div class=\"module-grid\">
+                {modules_html}
+              </div>
               <button type=\"submit\">Аудит домена</button>
             </form>
             <form method=\"get\" action=\"/report\">
@@ -142,29 +179,29 @@ def import_file(file_path: str = Form(...)) -> RedirectResponse:
 
 
 @app.post("/admin/audit-all")
-def audit_all() -> RedirectResponse:
+def audit_all(modules: list[str] | None = Form(None)) -> RedirectResponse:
     """Запускает аудит всех доменов через Celery."""
 
-    logger.info("Запуск аудита всех доменов через админку")
-    audit_all_task.delay()
+    logger.info("Запуск аудита всех доменов через админку: modules=%s", modules)
+    audit_all_task.delay(modules)
     return RedirectResponse(url="/", status_code=303)
 
 
 @app.post("/admin/audit-limit")
-def audit_limit(limit: int = Form(...)) -> RedirectResponse:
+def audit_limit(limit: int = Form(...), modules: list[str] | None = Form(None)) -> RedirectResponse:
     """Запускает аудит ограниченного списка доменов."""
 
-    logger.info("Запуск аудита доменов через админку с лимитом: %s", limit)
-    audit_limit_task.delay(limit)
+    logger.info("Запуск аудита доменов через админку с лимитом: %s, modules=%s", limit, modules)
+    audit_limit_task.delay(limit, modules)
     return RedirectResponse(url="/", status_code=303)
 
 
 @app.post("/admin/audit-domain")
-def audit_domain(domain: str = Form(...)) -> RedirectResponse:
+def audit_domain(domain: str = Form(...), modules: list[str] | None = Form(None)) -> RedirectResponse:
     """Запускает аудит конкретного домена."""
 
-    logger.info("Запуск аудита домена через админку: %s", domain)
-    audit_domain_task.delay(domain)
+    logger.info("Запуск аудита домена через админку: %s, modules=%s", domain, modules)
+    audit_domain_task.delay(domain, modules)
     return RedirectResponse(url="/", status_code=303)
 
 
