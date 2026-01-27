@@ -9,3 +9,5 @@ SQLAlchemy
 psycopg2-binary
 celery
 redis
+python-multipart
+watchfiles
