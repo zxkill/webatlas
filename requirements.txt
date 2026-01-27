@@ -3,3 +3,9 @@ aiolimiter
 tldextract
 PyYAML
 pytest
+fastapi
+uvicorn
+SQLAlchemy
+psycopg2-binary
+celery
+redis

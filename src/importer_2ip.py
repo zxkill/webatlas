@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 class TwoIpImporter:
-    """Импорт доменов из 2ip API в локальную SQLite-базу."""
+    """Импорт доменов из 2ip API в PostgreSQL."""
 
     def __init__(self, cfg: AppConfig) -> None:
         self._cfg = cfg
@@ -22,7 +22,7 @@ class TwoIpImporter:
         asyncio.run(self._run_async())
 
     async def _run_async(self) -> None:
-        db = Database(self._cfg.db.path)
+        db = Database(self._cfg.db.url)
         http = HttpClient(rps=self._cfg.rate_limit.rps, total_timeout_s=self._cfg.audit.timeouts.total)
 
         token = self._cfg.import_cfg.token

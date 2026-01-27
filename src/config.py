@@ -2,12 +2,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import logging
+import os
 import yaml
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
 class DbConfig:
-    path: str
+    url: str
 
 
 @dataclass(frozen=True)
@@ -47,10 +52,14 @@ def load_config(path: str = "config.yaml") -> AppConfig:
     Загружает конфигурацию из YAML. Все параметры берём только из конфига,
     чтобы запуск был одинаковым и воспроизводимым.
     """
-    data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+
+    # Позволяем переопределить путь через переменную окружения для контейнеров.
+    config_path = os.getenv("APP_CONFIG_PATH", path)
+    logger.info("Загрузка конфигурации приложения из файла: %s", config_path)
+    data = yaml.safe_load(Path(config_path).read_text(encoding="utf-8"))
 
     return AppConfig(
-        db=DbConfig(path=data["db"]["path"]),
+        db=DbConfig(url=data["db"]["url"]),
         rate_limit=RateLimitConfig(rps=float(data["rate_limit"]["rps"])),
         import_cfg=ImportConfig(
             api_url_template=data["import"]["api_url_template"],

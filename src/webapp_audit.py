@@ -3,102 +3,90 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import Optional
+from typing import Iterable, Optional
 from urllib.parse import urlunparse
+
 import aiohttp
 
-from .config import AppConfig
-from .db import Database, CheckRow, AdminPanelRow
-from .http import HttpClient
-from .bitrix import decode_html, score_bitrix, classify
-
+from src.bitrix import classify, decode_html, score_bitrix
+from src.config import load_config
+from src.http import HttpClient
+from src.webapp_db import AdminPanelRow, CheckRow, CmsRow, update_admin_panel, update_check, update_domain_cms
 
 logger = logging.getLogger(__name__)
 
 
 def ensure_url(scheme: str, domain: str, path: str) -> str:
-    # Универсальный сборщик URL: не допускаем “лишних” параметров и фрагментов.
+    """Собираем URL без лишних параметров, чтобы не было мусора в логах."""
+
+    # Формируем URL вручную, исключая query/fragment для чистого audit-лога.
     return urlunparse((scheme, domain, path, "", "", ""))
 
 
-class Auditor:
+class WebAuditor:
     """
-    Базовый аудит доменов:
-    - проверка главной страницы (https/http)
-    - классификация Bitrix по сигнатурам (cookies/html)
-    - при уверенном "yes" — проверка /bitrix/admin/ (без логина)
-    В дальнейшем здесь будут подключаться дополнительные проверки под разные CMS/фреймворки.
+    Аудитор для веб-админки.
+
+    Использует настройки из config.yaml для лимитов и таймаутов,
+    а запись результатов выполняет в PostgreSQL через webapp_db.
     """
 
-    def __init__(self, cfg: AppConfig) -> None:
-        self._cfg = cfg
+    def __init__(self) -> None:
+        self._cfg = load_config()
 
-    def run(self) -> None:
-        asyncio.run(self._run_async())
+    async def check_domains(self, domains: Iterable[str]) -> list[tuple[str, CheckRow, AdminPanelRow, Optional[CmsRow]]]:
+        """Запускаем аудит и возвращаем результаты по доменам."""
 
-    async def _run_async(self) -> None:
-        db = Database(self._cfg.db.url)
-        targets = db.load_domains()
-
+        targets = list(domains)
         if not targets:
-            db.close()
-            raise SystemExit("Нет доменов для аудита. Сначала импортируйте список доменов.")
+            logger.warning("Нет доменов для аудита")
+            return []
 
         http = HttpClient(
             rps=self._cfg.rate_limit.rps,
             total_timeout_s=self._cfg.audit.timeouts.total,
         )
+        # Ограничиваем количество одновременных проверок, чтобы не перегружать сеть.
         sem = asyncio.Semaphore(self._cfg.audit.concurrency)
 
         async with aiohttp.ClientSession() as session:
-            async def check_one(domain: str) -> None:
+            async def check_one(domain: str) -> tuple[str, CheckRow, AdminPanelRow, Optional[CmsRow]]:
+                # Каждая проверка идёт под семафором, чтобы держать заданный уровень параллельности.
                 async with sem:
                     logger.info("Запуск проверки домена: %s", domain)
                     check_row, admin_row, cms_row = await self._check_domain(session, http, domain)
-                    db.update_check(domain, "bitrix", check_row, description="Проверка сигнатур Bitrix")
-                    db.update_admin_panel(
-                        domain,
-                        "bitrix_admin",
-                        admin_row,
-                    )
-                    if cms_row is not None:
-                        db.update_domain_cms(
-                            domain,
-                            "bitrix",
-                            "1C-Bitrix",
-                            cms_row["status"],
-                            cms_row["confidence"],
-                            cms_row["evidence_json"],
-                        )
-                    db.commit()
+                    return domain, check_row, admin_row, cms_row
 
-            tasks = [asyncio.create_task(check_one(d)) for d in targets]
+            tasks = [asyncio.create_task(check_one(domain)) for domain in targets]
+            results: list[tuple[str, CheckRow, AdminPanelRow, Optional[CmsRow]]] = []
             done = 0
-            for fut in asyncio.as_completed(tasks):
-                await fut
+            for task in asyncio.as_completed(tasks):
+                # Сохраняем результаты по мере завершения задач.
+                result = await task
+                results.append(result)
                 done += 1
                 logger.info("[audit] %s/%s done", done, len(targets))
 
-        db.close()
-        logger.info("[audit] completed.")
+        logger.info("Аудит завершён, доменов обработано: %s", len(results))
+        return results
 
     async def _check_domain(
         self,
         session: aiohttp.ClientSession,
         http: HttpClient,
         domain: str,
-    ) -> tuple[CheckRow, AdminPanelRow, Optional[dict]]:
+    ) -> tuple[CheckRow, AdminPanelRow, Optional[CmsRow]]:
         """
         Выполняет единичную проверку домена и возвращает:
         - результат проверки CMS (CheckRow),
         - статус админки (AdminPanelRow),
-        - описание CMS-результата для связанной таблицы (dict | None).
+        - описание CMS-результата (CmsRow | None).
         """
+
         evidence: dict = {"domain": domain, "checked": {}}
         admin_evidence: dict = {"domain": domain, "checked": {}}
         cms_evidence: dict = {"domain": domain, "checked": {}}
 
-        # 1) GET / — проверяем доступность домена и собираем сигнатуры.
         homepage = None
         used_scheme = None
         set_cookie_agg = ""
@@ -114,10 +102,6 @@ class Auditor:
             evidence["checked"][scheme] = {"ok": True, "status": resp.status, "final_url": resp.final_url}
             homepage = resp
             used_scheme = scheme
-
-            # Собираем Set-Cookie “как есть”: серверы часто кладут несколько заголовков.
-            # aiohttp в dict не сохраняет множественные значения, поэтому здесь фиксируем минимум.
-            # Для сигнатуры BITRIX_SM_* обычно достаточно и одного.
             set_cookie_agg = resp.headers.get("Set-Cookie", "")
             break
 
@@ -145,7 +129,6 @@ class Auditor:
         cms_evidence["bitrix"] = {"score": score, **ev}
         cms_evidence["used_url"] = homepage.final_url
 
-        # 2) /bitrix/admin/ — только при уверенном yes
         admin_status = None
         admin_http_status = None
         admin_final_url = None
@@ -164,17 +147,15 @@ class Auditor:
                     "status": admin_resp.status,
                     "final_url": admin_resp.final_url,
                 }
-
-                # “endpoint существует” — когда получаем 200/30x/401/403
                 admin_status = "yes" if admin_resp.status in (200, 301, 302, 401, 403) else "no"
 
         cms_row = None
         if status in ("yes", "maybe"):
-            cms_row = {
-                "status": status,
-                "confidence": score,
-                "evidence_json": json.dumps(cms_evidence, ensure_ascii=False),
-            }
+            cms_row = CmsRow(
+                status=status,
+                confidence=score,
+                evidence_json=json.dumps(cms_evidence, ensure_ascii=False),
+            )
 
         return (
             CheckRow(
@@ -190,3 +171,22 @@ class Auditor:
             ),
             cms_row,
         )
+
+
+def run_audit_and_persist(domains: Iterable[str], session_factory) -> int:
+    """
+    Запускаем аудит и сохраняем результаты в PostgreSQL.
+
+    Возвращаем количество обработанных доменов для удобства в логах.
+    """
+
+    auditor = WebAuditor()
+    results = asyncio.run(auditor.check_domains(domains))
+    for domain, check_row, admin_row, cms_row in results:
+        with session_factory() as session:
+            update_check(session, domain, "bitrix", check_row, description="Проверка сигнатур Bitrix")
+            update_admin_panel(session, domain, "bitrix_admin", admin_row)
+            if cms_row is not None:
+                update_domain_cms(session, domain, "bitrix", "1C-Bitrix", cms_row)
+    logger.info("Аудит завершён, доменов обработано: %s", len(results))
+    return len(results)

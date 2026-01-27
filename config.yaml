@@ -1,5 +1,5 @@
 db:
-  path: "bitrix.sqlite"
+  url: "postgresql+psycopg2://webatlas:webatlas@postgres:5432/webatlas"
 
 rate_limit:
   rps: 10

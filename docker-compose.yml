@@ -1,0 +1,49 @@
+version: "3.9"
+
+services:
+  # Веб-сервис с FastAPI UI.
+  web:
+    build: .
+    ports:
+      - "8088:8088"
+    environment:
+      DATABASE_URL: postgresql+psycopg2://webatlas:webatlas@postgres:5432/webatlas
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_BACKEND_URL: redis://redis:6379/2
+      APP_HOST: 0.0.0.0
+      APP_PORT: 8088
+    depends_on:
+      - postgres
+      - redis
+
+  # Фоновый воркер Celery для обработки задач.
+  worker:
+    build: .
+    command: celery -A src.webapp_tasks worker --loglevel=info --uid=1000 --gid=1000
+    environment:
+      DATABASE_URL: postgresql+psycopg2://webatlas:webatlas@postgres:5432/webatlas
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_BACKEND_URL: redis://redis:6379/2
+    depends_on:
+      - postgres
+      - redis
+
+  # PostgreSQL — основная БД для хранения доменов.
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: webatlas
+      POSTGRES_PASSWORD: webatlas
+      POSTGRES_DB: webatlas
+    volumes:
+      - webatlas_pg:/var/lib/postgresql/data
+
+  # Redis используется как брокер и кэш для Celery.
+  redis:
+    image: redis:7-alpine
+
+volumes:
+  # Персистентный том для PostgreSQL.
+  webatlas_pg:

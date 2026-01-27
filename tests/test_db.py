@@ -1,13 +1,42 @@
 import json
-from pathlib import Path
+import os
 
-from src.db import Database, CheckRow, AdminPanelRow
+import pytest
+
+# Пропускаем тест, если SQLAlchemy не установлен.
+pytest.importorskip("sqlalchemy")
+
+from src.db import AdminPanelRow, CheckRow, Database
+from src.webapp_db import AdminPanel, Check, Cms, Domain, DomainCheck, DomainCms
 
 
-def test_db_upsert_and_update_check(tmp_path: Path) -> None:
-    # Создаём временную БД и добавляем домен.
-    db_path = tmp_path / "test.sqlite"
-    db = Database(str(db_path))
+# Проверяем основные операции БД на PostgreSQL. Тест пропускается без DSN.
+
+def _get_test_dsn() -> str:
+    dsn = os.getenv("POSTGRES_TEST_DSN")
+    if not dsn:
+        pytest.skip("POSTGRES_TEST_DSN не задан, пропускаем интеграционный тест")
+    return dsn
+
+
+def _cleanup(db: Database) -> None:
+    # Очищаем таблицы в корректном порядке, чтобы не было конфликтов FK.
+    session = db._session
+    session.query(DomainCheck).delete()
+    session.query(DomainCms).delete()
+    session.query(AdminPanel).delete()
+    session.query(Check).delete()
+    session.query(Cms).delete()
+    session.query(Domain).delete()
+    session.commit()
+
+
+def test_db_upsert_and_update_check() -> None:
+    # Создаём подключение к тестовой БД и очищаем её.
+    db = Database(_get_test_dsn())
+    _cleanup(db)
+
+    # Добавляем домен и проверяем дедупликацию.
     db.upsert_domain("example.com", source="file")
     db.upsert_domain("example.com", source="file")
     db.commit()
@@ -45,15 +74,15 @@ def test_db_upsert_and_update_check(tmp_path: Path) -> None:
     assert domains == ["example.com"]
 
     # Проверяем, что данные по проверке сохранились.
-    cur = db._conn.execute("SELECT status, score FROM domain_checks")
-    assert cur.fetchone() == ("yes", 10)
+    check_record = db._session.query(DomainCheck).one()
+    assert (check_record.status, check_record.score) == ("yes", 10)
 
     # Проверяем, что админка сохранена.
-    cur = db._conn.execute("SELECT status, http_status FROM admin_panels")
-    assert cur.fetchone() == ("yes", 200)
+    admin_record = db._session.query(AdminPanel).one()
+    assert (admin_record.status, admin_record.http_status) == ("yes", 200)
 
     # Проверяем связь домена с CMS.
-    cur = db._conn.execute("SELECT status, confidence FROM domain_cms")
-    assert cur.fetchone() == ("yes", 10)
+    cms_record = db._session.query(DomainCms).one()
+    assert (cms_record.status, cms_record.confidence) == ("yes", 10)
 
     db.close()
