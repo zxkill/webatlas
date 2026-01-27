@@ -46,3 +46,31 @@ def test_load_config_env_override(monkeypatch, tmp_path: Path) -> None:
 
     cfg = load_config()
     assert cfg.rate_limit.rps == 2
+
+
+def test_load_config_missing_file_raises(tmp_path: Path) -> None:
+    # Проверяем, что отсутствие файла конфига приводит к FileNotFoundError.
+    missing_path = tmp_path / "missing.yaml"
+    try:
+        load_config(str(missing_path))
+    except FileNotFoundError:
+        assert True
+    else:
+        assert False, "Ожидался FileNotFoundError при отсутствии файла"
+
+
+def test_load_config_missing_section_raises(tmp_path: Path) -> None:
+    # Проверяем, что отсутствующая секция приводит к явной ошибке KeyError.
+    config_path = tmp_path / "config.yaml"
+    config_data = {
+        "db": {"url": "postgresql+psycopg2://user:pass@localhost:5432/db"},
+        "rate_limit": {"rps": 1},
+    }
+    config_path.write_text(yaml.safe_dump(config_data), encoding="utf-8")
+
+    try:
+        load_config(str(config_path))
+    except KeyError:
+        assert True
+    else:
+        assert False, "Ожидался KeyError при отсутствии секции import/audit"

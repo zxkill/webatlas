@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Iterable, Optional
 
 from celery import Celery
 
@@ -31,6 +32,14 @@ celery_app = Celery(
 )
 celery_app.conf.task_always_eager = config.celery_always_eager
 celery_app.conf.task_eager_propagates = True
+
+
+def _normalize_modules(modules: Optional[Iterable[str]]) -> list[str] | None:
+    """Преобразует список модулей в удобный для логов формат."""
+
+    if modules is None:
+        return None
+    return list(modules)
 
 
 @celery_app.task(name="webatlas.add_domain")
@@ -64,31 +73,34 @@ def import_domains_from_file_task(file_path: str) -> dict[str, int]:
 
 
 @celery_app.task(name="webatlas.audit_all")
-def audit_all_task() -> dict[str, int]:
+def audit_all_task(modules: Optional[Iterable[str]] = None) -> dict[str, int]:
     """Запускаем аудит всех доменов из базы."""
 
-    logger.info("Получена задача на аудит всех доменов")
+    normalized_modules = _normalize_modules(modules)
+    logger.info("Получена задача на аудит всех доменов (модули=%s)", normalized_modules)
     with db_state.session_factory() as session:
         domains = [record.domain for record in list_domains(session, limit=1000000)]
-    processed = run_audit_and_persist(domains, db_state.session_factory)
+    processed = run_audit_and_persist(domains, db_state.session_factory, module_keys=normalized_modules)
     return {"processed": processed}
 
 
 @celery_app.task(name="webatlas.audit_limit")
-def audit_limit_task(limit: int) -> dict[str, int]:
+def audit_limit_task(limit: int, modules: Optional[Iterable[str]] = None) -> dict[str, int]:
     """Запускаем аудит ограниченного числа доменов."""
 
-    logger.info("Получена задача на аудит доменов с лимитом: %s", limit)
+    normalized_modules = _normalize_modules(modules)
+    logger.info("Получена задача на аудит доменов с лимитом: %s (модули=%s)", limit, normalized_modules)
     with db_state.session_factory() as session:
         domains = [record.domain for record in list_domains(session, limit=limit)]
-    processed = run_audit_and_persist(domains, db_state.session_factory)
+    processed = run_audit_and_persist(domains, db_state.session_factory, module_keys=normalized_modules)
     return {"processed": processed}
 
 
 @celery_app.task(name="webatlas.audit_domain")
-def audit_domain_task(domain: str) -> dict[str, int]:
+def audit_domain_task(domain: str, modules: Optional[Iterable[str]] = None) -> dict[str, int]:
     """Запускаем аудит конкретного домена."""
 
-    logger.info("Получена задача на аудит домена: %s", domain)
-    processed = run_audit_and_persist([domain], db_state.session_factory)
+    normalized_modules = _normalize_modules(modules)
+    logger.info("Получена задача на аудит домена: %s (модули=%s)", domain, normalized_modules)
+    processed = run_audit_and_persist([domain], db_state.session_factory, module_keys=normalized_modules)
     return {"processed": processed}
