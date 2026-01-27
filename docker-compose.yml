@@ -1,9 +1,9 @@
 version: "3.9"
 
 services:
-  # Веб-сервис с FastAPI UI.
   web:
-    build: .
+    build:
+      context: .
     ports:
       - "8088:8088"
     environment:
@@ -13,37 +13,57 @@ services:
       CELERY_BACKEND_URL: redis://redis:6379/2
       APP_HOST: 0.0.0.0
       APP_PORT: 8088
+    volumes:
+      - ./src:/app/src
+      - ./config.yaml:/app/config.yaml:ro
+      - ./domains.txt:/app/domains.txt:ro
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    command: >
+      uvicorn src.webapp_app:app
+      --host 0.0.0.0
+      --port 8088
+      --reload
+      --reload-dir /app/src
 
-  # Фоновый воркер Celery для обработки задач.
   worker:
-    build: .
-    command: celery -A src.webapp_tasks worker --loglevel=info --uid=1000 --gid=1000
+    build:
+      context: .
     environment:
       DATABASE_URL: postgresql+psycopg2://webatlas:webatlas@postgres:5432/webatlas
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/1
       CELERY_BACKEND_URL: redis://redis:6379/2
+    volumes:
+      - ./src:/app/src
+      - ./config.yaml:/app/config.yaml:ro
+      - ./domains.txt:/app/domains.txt:ro
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    # Авто-перезапуск celery при изменениях python-файлов (нужен пакет watchfiles)
+    command: sh -c "watchfiles --filter python & celery -A src.webapp_tasks:celery_app worker --loglevel=info"
 
-  # PostgreSQL — основная БД для хранения доменов.
   postgres:
     image: postgres:15-alpine
     environment:
       POSTGRES_USER: webatlas
       POSTGRES_PASSWORD: webatlas
       POSTGRES_DB: webatlas
+    ports:
+      - "127.0.0.1:5432:5432"
     volumes:
-      - webatlas_pg:/var/lib/postgresql/data
+      - ./_data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U webatlas -d webatlas"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
 
-  # Redis используется как брокер и кэш для Celery.
   redis:
     image: redis:7-alpine
-
-volumes:
-  # Персистентный том для PostgreSQL.
-  webatlas_pg:
