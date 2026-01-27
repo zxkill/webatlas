@@ -49,6 +49,7 @@ python scripts/audit_allowlist.py
 - `CELERY_BROKER_URL` — брокер Celery (обычно Redis).
 - `CELERY_BACKEND_URL` — backend Celery для результатов.
 - `APP_HOST` и `APP_PORT` — параметры запуска веб-сервера.
+- `APP_CONFIG_PATH` — путь до `config.yaml`, если конфиг расположен не в корне контейнера.
 
 ### SEO ключевые слова
 Domain audit, CMS detection, vulnerability scanning, web security automation, PostgreSQL, Redis, Celery, Docker Compose, WebAtlas.

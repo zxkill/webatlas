@@ -20,7 +20,7 @@ services:
   # Фоновый воркер Celery для обработки задач.
   worker:
     build: .
-    command: celery -A src.webapp_tasks worker --loglevel=info
+    command: celery -A src.webapp_tasks worker --loglevel=info --uid=1000 --gid=1000
     environment:
       DATABASE_URL: postgresql+psycopg2://webatlas:webatlas@postgres:5432/webatlas
       REDIS_URL: redis://redis:6379/0

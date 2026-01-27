@@ -9,8 +9,9 @@ COPY requirements.txt ./
 # Устанавливаем зависимости без кэша, чтобы уменьшить размер слоя.
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Копируем исходники приложения.
+# Копируем исходники приложения и базовую конфигурацию.
 COPY src ./src
+COPY config.yaml ./config.yaml
 
 # Добавляем PYTHONPATH для корректного импорта модулей.
 ENV PYTHONPATH=/app
