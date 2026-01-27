@@ -1,32 +1,15 @@
 from __future__ import annotations
 
 import asyncio
-from urllib.parse import urlparse
+import logging
 import aiohttp
-import tldextract
 
 from .config import AppConfig
 from .db import Database
 from .http import HttpClient
+from .domain_utils import normalize_domain
 
-
-def normalize_domain(raw: str) -> str | None:
-    raw = (raw or "").strip().lower()
-    if not raw or raw.startswith("#"):
-        return None
-
-    if "://" in raw:
-        p = urlparse(raw)
-        candidate = p.netloc or p.path
-    else:
-        candidate = raw
-
-    candidate = candidate.split("@")[-1].split(":")[0].strip()
-    ext = tldextract.extract(candidate)
-    if not ext.domain or not ext.suffix:
-        return None
-
-    return ".".join(part for part in [ext.subdomain, ext.domain, ext.suffix] if part)
+logger = logging.getLogger(__name__)
 
 
 class TwoIpImporter:
@@ -55,6 +38,8 @@ class TwoIpImporter:
             total_pages = int(data.get("pagination", {}).get("total_pages", 1))
 
             def ingest(domains: list[str]) -> int:
+                # Импортируем домены по одной странице.
+                # Здесь важно отсекать дубли и невалидные строки.
                 nonlocal imported
                 added = 0
                 for d in domains or []:
@@ -70,7 +55,7 @@ class TwoIpImporter:
 
             added = ingest(data.get("domains", []))
             db.commit()
-            print(f"[import] page 1/{total_pages}: +{added}, total={imported}")
+            logger.info("[import] page 1/%s: +%s, total=%s", total_pages, added, imported)
 
             page = 2
             while page <= total_pages and imported < max_domains:
@@ -78,8 +63,8 @@ class TwoIpImporter:
                 data = await http.get_json(session, url)
                 added = ingest(data.get("domains", []))
                 db.commit()
-                print(f"[import] page {page}/{total_pages}: +{added}, total={imported}")
+                logger.info("[import] page %s/%s: +%s, total=%s", page, total_pages, added, imported)
                 page += 1
 
         db.close()
-        print(f"[import] completed. Imported={imported}")
+        logger.info("[import] completed. Imported=%s", imported)

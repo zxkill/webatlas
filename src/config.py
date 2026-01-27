@@ -20,6 +20,7 @@ class ImportConfig:
     api_url_template: str
     token: str
     max_domains: int
+    file_path: str
 
 
 @dataclass(frozen=True)
@@ -55,6 +56,7 @@ def load_config(path: str = "config.yaml") -> AppConfig:
             api_url_template=data["import"]["api_url_template"],
             token=data["import"]["token"],
             max_domains=int(data["import"]["max_domains"]),
+            file_path=data["import"]["file_path"],
         ),
         audit=AuditConfig(
             concurrency=int(data["audit"]["concurrency"]),
