@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Iterable, Optional
+from typing import Any, Iterable, Optional
 
 from celery import Celery
 
@@ -34,12 +34,66 @@ celery_app.conf.task_always_eager = config.celery_always_eager
 celery_app.conf.task_eager_propagates = True
 
 
-def _normalize_modules(modules: Optional[Iterable[str]]) -> list[str] | None:
-    """Преобразует список модулей в удобный для логов формат."""
+def _normalize_modules(modules: Optional[Iterable[str]] | str) -> list[str] | None:
+    """
+    Преобразует список модулей в удобный для логов формат.
+
+    Мы отдельно обрабатываем строку, чтобы не развалить её на символы при list().
+    """
 
     if modules is None:
+        logger.debug("Список модулей не передан, вернём None")
         return None
-    return list(modules)
+    if isinstance(modules, str):
+        logger.debug("Список модулей передан строкой, оборачиваем в список: %s", modules)
+        return [modules]
+    normalized_modules = list(modules)
+    logger.debug("Нормализован список модулей: %s", normalized_modules)
+    return normalized_modules
+
+
+def _resolve_task_modules(
+    modules: Optional[Iterable[str]] | str,
+    extra_args: tuple[Any, ...],
+    extra_kwargs: dict[str, Any],
+) -> list[str] | None:
+    """
+    Извлекает список модулей из аргументов Celery-задачи.
+
+    Этот хелпер нужен для обратной совместимости, когда UI отправляет дополнительные
+    аргументы, а воркер ещё запущен со старой сигнатурой.
+    """
+
+    # Сохраняем исходное значение, чтобы использовать его как приоритетное.
+    resolved_modules: Optional[Iterable[str]] | str | None = modules
+
+    # Если модули не заданы явно, пробуем извлечь их из позиционных аргументов.
+    consumed_all_positional = False
+    if resolved_modules is None and extra_args:
+        # Если пришло несколько позиционных аргументов, считаем, что это список модулей.
+        if len(extra_args) > 1 and all(isinstance(item, str) for item in extra_args):
+            resolved_modules = list(extra_args)
+            consumed_all_positional = True
+        else:
+            resolved_modules = extra_args[0]
+        logger.warning("Модули переданы позиционно, применяем обратную совместимость: %s", resolved_modules)
+
+    # Если нет позиционных аргументов, проверяем kwargs.
+    if resolved_modules is None and "modules" in extra_kwargs:
+        resolved_modules = extra_kwargs.get("modules")
+        logger.warning("Модули переданы через kwargs, применяем обратную совместимость: %s", resolved_modules)
+
+    # Логируем лишние аргументы, чтобы упростить диагностику.
+    unexpected_args = () if consumed_all_positional else extra_args[1:]
+    unexpected_kwargs = {key: value for key, value in extra_kwargs.items() if key != "modules"}
+    if unexpected_args or unexpected_kwargs:
+        logger.warning(
+            "Обнаружены лишние аргументы audit_domain_task: args=%s kwargs=%s",
+            unexpected_args,
+            unexpected_kwargs,
+        )
+
+    return _normalize_modules(resolved_modules)
 
 
 @celery_app.task(name="webatlas.add_domain")
@@ -97,10 +151,26 @@ def audit_limit_task(limit: int, modules: Optional[Iterable[str]] = None) -> dic
 
 
 @celery_app.task(name="webatlas.audit_domain")
-def audit_domain_task(domain: str, modules: Optional[Iterable[str]] = None) -> dict[str, int]:
-    """Запускаем аудит конкретного домена."""
+def audit_domain_task(
+    domain: str,
+    modules: Optional[Iterable[str]] = None,
+    *extra_args: Any,
+    **extra_kwargs: Any,
+) -> dict[str, int]:
+    """
+    Запускаем аудит конкретного домена.
 
-    normalized_modules = _normalize_modules(modules)
-    logger.info("Получена задача на аудит домена: %s (модули=%s)", domain, normalized_modules)
+    Принимаем extra_args/extra_kwargs для защиты от несовпадения сигнатур между UI и воркерами.
+    """
+
+    # Извлекаем модули, чтобы ошибка в сигнатуре не падала без контекста.
+    normalized_modules = _resolve_task_modules(modules, extra_args, extra_kwargs)
+    logger.info(
+        "Получена задача на аудит домена: %s (модули=%s, extra_args=%s, extra_kwargs_keys=%s)",
+        domain,
+        normalized_modules,
+        list(extra_args),
+        list(extra_kwargs.keys()),
+    )
     processed = run_audit_and_persist([domain], db_state.session_factory, module_keys=normalized_modules)
     return {"processed": processed}
