@@ -116,7 +116,7 @@ a:hover {
 
 .grid {
     display: grid;
-    grid-template-columns: 1.15fr .85fr;
+    grid-template-columns: 1.27fr .85fr;
     gap: 16px;
     margin-top: 18px;
 }
