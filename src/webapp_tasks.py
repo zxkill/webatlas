@@ -143,6 +143,61 @@ def _resolve_task_domain(
     return resolved_domain
 
 
+def _resolve_task_limit(
+    limit: Optional[int] | str,
+    extra_args: tuple[Any, ...],
+    extra_kwargs: dict[str, Any],
+) -> tuple[int, tuple[Any, ...]]:
+    """
+    Разбирает лимит доменов из аргументов Celery-задачи.
+
+    Возвращаем кортеж (limit, remaining_args), чтобы корректно отделить лимит
+    от остальных позиционных аргументов (например, списка модулей).
+    """
+
+    resolved_limit: Optional[int] | str = limit
+    remaining_args = extra_args
+
+    # 1) Проверяем позиционные аргументы (совместимость со старым UI).
+    if resolved_limit is None and extra_args:
+        candidate = extra_args[0]
+        # Лимит обычно передаётся первым позиционным аргументом.
+        if isinstance(candidate, (int, str)):
+            resolved_limit = candidate
+            remaining_args = extra_args[1:]
+            logger.warning("Лимит передан позиционно, применяем обратную совместимость: %s", resolved_limit)
+        else:
+            logger.warning(
+                "Позиционный аргумент не похож на лимит, тип=%s значение=%s",
+                type(candidate),
+                candidate,
+            )
+
+    # 2) Проверяем именованный параметр limit.
+    if resolved_limit is None and "limit" in extra_kwargs:
+        resolved_limit = extra_kwargs.get("limit")
+        logger.warning("Лимит передан через kwargs, применяем обратную совместимость: %s", resolved_limit)
+
+    # 3) Приводим строковые значения к int, чтобы не падать на типах.
+    if isinstance(resolved_limit, str):
+        if resolved_limit.isdigit():
+            logger.info("Преобразуем лимит из строки в int: %s", resolved_limit)
+            resolved_limit = int(resolved_limit)
+        else:
+            logger.error("Лимит передан строкой, но не является числом: %s", resolved_limit)
+            raise ValueError("Лимит аудита должен быть числом")
+
+    # 4) Контрольный валидатор: лимит обязателен и должен быть int.
+    if resolved_limit is None:
+        logger.error("Лимит аудита не задан ни в args, ни в kwargs")
+        raise ValueError("Лимит аудита обязателен")
+    if not isinstance(resolved_limit, int):
+        logger.error("Лимит имеет неожиданный тип: %s", type(resolved_limit))
+        raise TypeError("Лимит аудита должен быть целым числом")
+
+    return resolved_limit, remaining_args
+
+
 def _get_header_modules(request: Any) -> Optional[Iterable[str]] | str:
     """
     Достаёт модули из заголовков Celery-задачи.
@@ -192,27 +247,70 @@ def import_domains_from_file_task(file_path: str) -> dict[str, int]:
     }
 
 
-@celery_app.task(name="webatlas.audit_all")
-def audit_all_task(modules: Optional[Iterable[str]] = None) -> dict[str, int]:
-    """Запускаем аудит всех доменов из базы."""
+@celery_app.task(name="webatlas.audit_all", bind=True)
+def audit_all_task(self, *task_args: Any, **task_kwargs: Any) -> dict[str, int]:
+    """
+    Запускаем аудит всех доменов из базы.
 
-    normalized_modules = _normalize_modules(modules)
+    Делаем задачу максимально устойчивой к несовпадению сигнатур UI и воркеров:
+    принимаем любые args/kwargs и аккуратно извлекаем список модулей.
+    """
+
+    # Извлекаем модули из аргументов или заголовков Celery-задачи.
+    header_modules = _get_header_modules(getattr(self, "request", None))
+    normalized_modules = _resolve_task_modules(
+        task_kwargs.get("modules"),
+        task_args,
+        task_kwargs,
+        header_modules=header_modules,
+    )
     logger.info("Получена задача на аудит всех доменов (модули=%s)", normalized_modules)
+
+    # Загружаем домены с максимально большим лимитом, чтобы охватить все записи.
     with db_state.session_factory() as session:
         domains = [record.domain for record in list_domains(session, limit=1000000)]
+    logger.debug("Количество доменов для аудита всех записей: %s", len(domains))
+
     processed = run_audit_and_persist(domains, db_state.session_factory, module_keys=normalized_modules)
+    logger.info("Аудит всех доменов завершён, обработано: %s", processed)
     return {"processed": processed}
 
 
-@celery_app.task(name="webatlas.audit_limit")
-def audit_limit_task(limit: int, modules: Optional[Iterable[str]] = None) -> dict[str, int]:
-    """Запускаем аудит ограниченного числа доменов."""
+@celery_app.task(name="webatlas.audit_limit", bind=True)
+def audit_limit_task(self, *task_args: Any, **task_kwargs: Any) -> dict[str, int]:
+    """
+    Запускаем аудит ограниченного числа доменов.
 
-    normalized_modules = _normalize_modules(modules)
-    logger.info("Получена задача на аудит доменов с лимитом: %s (модули=%s)", limit, normalized_modules)
+    Поддерживаем устаревшие форматы вызовов, чтобы не ломать UI/воркеры при обновлениях.
+    """
+
+    # Разбираем лимит и отделяем его от остальных аргументов.
+    resolved_limit, remaining_args = _resolve_task_limit(
+        task_kwargs.get("limit"),
+        task_args,
+        task_kwargs,
+    )
+    # Извлекаем модули с учётом заголовков Celery и остаточных аргументов.
+    header_modules = _get_header_modules(getattr(self, "request", None))
+    normalized_modules = _resolve_task_modules(
+        task_kwargs.get("modules"),
+        remaining_args,
+        task_kwargs,
+        header_modules=header_modules,
+    )
+    logger.info(
+        "Получена задача на аудит доменов с лимитом: %s (модули=%s)",
+        resolved_limit,
+        normalized_modules,
+    )
+
+    # Получаем ограниченный список доменов для аудита.
     with db_state.session_factory() as session:
-        domains = [record.domain for record in list_domains(session, limit=limit)]
+        domains = [record.domain for record in list_domains(session, limit=resolved_limit)]
+    logger.debug("Количество доменов для аудита с лимитом: %s", len(domains))
+
     processed = run_audit_and_persist(domains, db_state.session_factory, module_keys=normalized_modules)
+    logger.info("Аудит доменов с лимитом завершён, обработано: %s", processed)
     return {"processed": processed}
 
 
