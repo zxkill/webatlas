@@ -126,3 +126,33 @@ def test_resolve_domain_from_kwargs(monkeypatch):
 
     resolved = tasks_module._resolve_task_domain(None, (), {"domain": "example.org"})
     assert resolved == "example.org"
+
+
+def test_resolve_modules_from_headers(monkeypatch):
+    """
+    Проверяем чтение модулей из заголовков задачи.
+
+    Это основной путь передачи модулей из UI, чтобы избежать ошибок сигнатуры.
+    """
+
+    tasks_module = _load_tasks_module(monkeypatch)
+
+    resolved = tasks_module._resolve_task_modules(None, (), {}, header_modules=["availability"])
+    assert resolved == ["availability"]
+
+
+def test_audit_domain_task_uses_header_modules(monkeypatch):
+    """
+    Проверяем, что хелпер корректно читает модули из заголовков Celery.
+    """
+
+    tasks_module = _load_tasks_module(monkeypatch)
+
+    request = type(
+        "Request",
+        (),
+        {"headers": {"modules": ["tls"]}},
+    )()
+
+    resolved = tasks_module._get_header_modules(request)
+    assert resolved == ["tls"]

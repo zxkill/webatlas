@@ -56,6 +56,7 @@ def _resolve_task_modules(
     modules: Optional[Iterable[str]] | str,
     extra_args: tuple[Any, ...],
     extra_kwargs: dict[str, Any],
+    header_modules: Optional[Iterable[str]] | str = None,
 ) -> list[str] | None:
     """
     Извлекает список модулей из аргументов Celery-задачи.
@@ -82,6 +83,11 @@ def _resolve_task_modules(
     if resolved_modules is None and "modules" in extra_kwargs:
         resolved_modules = extra_kwargs.get("modules")
         logger.warning("Модули переданы через kwargs, применяем обратную совместимость: %s", resolved_modules)
+
+    # Если модули всё ещё не заданы, используем заголовки задачи (актуально для UI).
+    if resolved_modules is None and header_modules is not None:
+        resolved_modules = header_modules
+        logger.info("Модули получены из заголовков задачи: %s", resolved_modules)
 
     # Логируем лишние аргументы, чтобы упростить диагностику.
     unexpected_args = () if consumed_all_positional else extra_args[1:]
@@ -135,6 +141,25 @@ def _resolve_task_domain(
         raise TypeError("Домен должен быть строкой")
 
     return resolved_domain
+
+
+def _get_header_modules(request: Any) -> Optional[Iterable[str]] | str:
+    """
+    Достаёт модули из заголовков Celery-задачи.
+
+    Храним эту логику отдельно, чтобы проще тестировать и безопасно обрабатывать None.
+    """
+
+    if request is None:
+        logger.debug("Запрос Celery отсутствует, заголовки недоступны")
+        return None
+
+    headers = getattr(request, "headers", None)
+    if not isinstance(headers, dict):
+        logger.debug("Заголовки Celery отсутствуют или имеют неожиданный формат: %s", type(headers))
+        return None
+
+    return headers.get("modules")
 
 
 @celery_app.task(name="webatlas.add_domain")
@@ -191,8 +216,8 @@ def audit_limit_task(limit: int, modules: Optional[Iterable[str]] = None) -> dic
     return {"processed": processed}
 
 
-@celery_app.task(name="webatlas.audit_domain")
-def audit_domain_task(*task_args: Any, **task_kwargs: Any) -> dict[str, int]:
+@celery_app.task(name="webatlas.audit_domain", bind=True)
+def audit_domain_task(self, *task_args: Any, **task_kwargs: Any) -> dict[str, int]:
     """
     Запускаем аудит конкретного домена.
 
@@ -206,10 +231,13 @@ def audit_domain_task(*task_args: Any, **task_kwargs: Any) -> dict[str, int]:
         task_args,
         task_kwargs,
     )
+    # Извлекаем модули из заголовков запроса, если UI передал их таким способом.
+    header_modules = _get_header_modules(getattr(self, "request", None))
     normalized_modules = _resolve_task_modules(
         task_kwargs.get("modules"),
         task_args[1:],
         task_kwargs,
+        header_modules=header_modules,
     )
     logger.info(
         "Получена задача на аудит домена: %s (модули=%s, extra_args=%s, extra_kwargs_keys=%s)",
