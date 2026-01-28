@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+{% from "partials/_status.html" import status_pill %}
+
+{% block content %}
+<a class="back" href="/">← Назад</a>
+
+{% if not report %}
+  <div class="card" style="margin-top:14px;">
+    <div class="card-header">
+      <div>
+        <p class="card-title">Отчёт не найден</p>
+        <p class="card-subtitle">Домен отсутствует в базе данных.</p>
+      </div>
+    </div>
+    <div class="card-body">
+      <p class="hint">Домен: <span class="mono">{{ domain }}</span></p>
+    </div>
+  </div>
+{% else %}
+  {% set checks = report.checks or report.get('checks') or [] %}
+  {% set cms = report.cms or report.get('cms') or [] %}
+  {% set admin_panels = report.admin_panels or report.get('admin_panels') or [] %}
+
+  <div class="card" style="margin-top:14px;">
+    <div class="card-header">
+      <div>
+        <p class="card-title">Отчёт по домену</p>
+        <p class="card-subtitle"><span class="mono">{{ report.domain or report.get('domain', domain) }}</span></p>
+      </div>
+      <span class="pill"><span class="dot"></span>Report</span>
+    </div>
+
+    <div class="card-body stack">
+      <div class="kvs">
+        <div class="k">Источник</div><div class="v">{{ report.source or report.get('source','-') }}</div>
+        <div class="k">Создан</div><div class="v">{{ report.created_at or report.get('created_at','-') }}</div>
+        <div class="k">Обновлён</div><div class="v">{{ report.updated_at or report.get('updated_at','-') }}</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid" style="margin-top:16px; grid-template-columns: 1fr;">
+    <div class="card">
+      <div class="card-header">
+        <div>
+          <p class="card-title">Проверки</p>
+          <p class="card-subtitle">Сводные результаты по модулям.</p>
+        </div>
+        <span class="pill"><span class="dot"></span>{{ checks|length }} шт.</span>
+      </div>
+      <div class="card-body">
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Ключ</th><th>Статус</th><th>Score</th></tr></thead>
+            <tbody>
+              {% if checks %}
+                {% for c in checks %}
+                  <tr>
+                    <td class="mono">{{ c.key or c.get('key','') }}</td>
+                    <td>{{ status_pill(c.status if c.status is defined else c.get('status')) }}</td>
+                    <td class="mono">{{ c.score if c.score is defined else c.get('score','') }}</td>
+                  </tr>
+                {% endfor %}
+              {% else %}
+                <tr><td colspan="3">Данных пока нет</td></tr>
+              {% endif %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <div>
+          <p class="card-title">CMS</p>
+          <p class="card-subtitle">Определение CMS/фреймворка.</p>
+        </div>
+        <span class="pill"><span class="dot"></span>{{ cms|length }} шт.</span>
+      </div>
+      <div class="card-body">
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Название</th><th>Ключ</th><th>Статус</th><th>Confidence</th></tr></thead>
+            <tbody>
+              {% if cms %}
+                {% for x in cms %}
+                  <tr>
+                    <td>{{ x.name if x.name is defined else x.get('name','') }}</td>
+                    <td class="mono">{{ x.key if x.key is defined else x.get('key','') }}</td>
+                    <td>{{ status_pill(x.status if x.status is defined else x.get('status')) }}</td>
+                    <td class="mono">{{ x.confidence if x.confidence is defined else x.get('confidence','') }}</td>
+                  </tr>
+                {% endfor %}
+              {% else %}
+                <tr><td colspan="4">Данных пока нет</td></tr>
+              {% endif %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <div>
+          <p class="card-title">Админ-панели</p>
+          <p class="card-subtitle">Результаты по известным путям админок.</p>
+        </div>
+        <span class="pill"><span class="dot"></span>{{ admin_panels|length }} шт.</span>
+      </div>
+      <div class="card-body">
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Ключ</th><th>Статус</th><th>HTTP</th></tr></thead>
+            <tbody>
+              {% if admin_panels %}
+                {% for a in admin_panels %}
+                  <tr>
+                    <td class="mono">{{ a.panel_key if a.panel_key is defined else a.get('panel_key','') }}</td>
+                    <td>{{ status_pill(a.status if a.status is defined else a.get('status')) }}</td>
+                    <td class="mono">{{ a.http_status if a.http_status is defined else a.get('http_status','') }}</td>
+                  </tr>
+                {% endfor %}
+              {% else %}
+                <tr><td colspan="3">Данных пока нет</td></tr>
+              {% endif %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+{% endif %}
+{% endblock %}

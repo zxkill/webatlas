@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>{{ page.title }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', path='css/app.css') }}" />
+  </head>
+  <body>
+    <div class="topbar">
+      <div class="topbar-inner">
+        <div class="brand">
+          <span class="logo" aria-hidden="true"></span>
+          <h1>WebAtlas</h1>
+          <div class="meta">{{ page.subtitle }}</div>
+        </div>
+        <div class="meta">Fast audit console</div>
+      </div>
+    </div>
+
+    <div class="container">
+      {% block content %}{% endblock %}
+      <p class="footer-note">
+        Совет: импорт/аудит запускайте в фоне (Celery). UI отображает текущие данные в БД.
+      </p>
+    </div>
+
+    <script src="{{ url_for('static', path='js/app.js') }}"></script>
+  </body>
+</html>

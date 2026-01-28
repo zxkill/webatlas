@@ -1,0 +1,12 @@
+{% macro status_pill(status) -%}
+  {% set s = (status or '')|lower|trim %}
+  {% set cls = '' %}
+  {% if s in ['ok','passed','true','success','found'] %}
+    {% set cls = 'ok' %}
+  {% elif s in ['warn','warning','unknown','maybe'] %}
+    {% set cls = 'warn' %}
+  {% elif s in ['bad','fail','failed','false','error','not_found'] %}
+    {% set cls = 'bad' %}
+  {% endif %}
+  <span class="pill {{ cls }}"><span class="dot"></span>{{ status or 'n/a' }}</span>
+{%- endmacro %}

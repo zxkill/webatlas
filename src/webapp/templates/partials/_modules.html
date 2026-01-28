@@ -1,0 +1,23 @@
+{% macro modules_picker(scope_id, modules) -%}
+  <div data-module-scope="{{ scope_id }}">
+    <div class="module-toolbar">
+      <button class="btn ghost" data-modules-all type="button">Выбрать всё</button>
+      <button class="btn ghost" data-modules-none type="button">Снять всё</button>
+      <span class="hint">Выбор модулей применяется к запуску задачи.</span>
+    </div>
+
+    <div class="module-grid">
+      {% for m in modules %}
+        <label class="module">
+          <div class="top">
+            <input type="checkbox" name="modules" value="{{ m.key }}" checked />
+            <div>
+              <div class="name">{{ m.name }}</div>
+              <div class="desc">{{ m.description }}</div>
+            </div>
+          </div>
+        </label>
+      {% endfor %}
+    </div>
+  </div>
+{%- endmacro %}
