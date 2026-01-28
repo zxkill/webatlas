@@ -5,9 +5,7 @@ rate_limit:
   rps: 10
 
 import:
-  api_url_template: "https://api.2ip.io/cms/bitrix/ru?page={page}&token={token}"
-  token: "o0pi7zyk6tp3bqmh"
-  max_domains: 1000000
+  url_template: "https://purecrawl.com/domains/ru.txt.zip"
   file_path: "domains.txt"
 
 audit:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from typing import Any, Generator
 
 from .db import Database
 from .domain_utils import load_domains_from_file
@@ -17,6 +18,9 @@ class FileImportStats:
     inserted_domains: int
     skipped_duplicates: int
 
+def _chunks(items: list[str], size: int) -> Generator[list[str], Any, None]:
+    for i in range(0, len(items), size):
+        yield items[i:i+size]
 
 class DomainFileImporter:
     """
@@ -27,24 +31,24 @@ class DomainFileImporter:
     def __init__(self, db_url: str) -> None:
         self._db_url = db_url
 
-    def run(self, path: str, source: str = "file") -> FileImportStats:
-        """
-        Загружает домены из файла, нормализует и сохраняет в БД.
-        Возвращает подробную статистику импорта.
-        """
-
+    def run(self, path: str, source: str = "file", batch_size: int = 5000) -> FileImportStats:
         logger.info("Импорт доменов из файла: %s", path)
         domains = load_domains_from_file(path)
-        # Сохраняем уникальные домены, чтобы избежать повторных вставок.
         unique_domains = sorted(set(domains))
         logger.info("Найдено доменов: всего=%s, уникальных=%s", len(domains), len(unique_domains))
 
         db = Database(self._db_url)
+
         inserted = 0
-        for domain in unique_domains:
-            # Добавляем домен с привязкой источника импорта.
-            db.upsert_domain(domain, source=source)
-            inserted += 1
+        already_in_db = 0
+
+        for batch in _chunks(unique_domains, batch_size):
+            existing = db.fetch_existing_domains(batch)  # пачкой
+            to_insert = [d for d in batch if d not in existing]
+
+            already_in_db += (len(batch) - len(to_insert))
+            inserted += db.insert_domains(to_insert, source=source)  # пачкой
+
         db.commit()
         db.close()
 
@@ -53,10 +57,10 @@ class DomainFileImporter:
             normalized_domains=len(domains),
             unique_domains=len(unique_domains),
             inserted_domains=inserted,
-            skipped_duplicates=len(domains) - len(unique_domains),
+            skipped_duplicates=(len(domains) - len(unique_domains)) + already_in_db,
         )
         logger.info(
-            "Импорт завершён: lines=%s, normalized=%s, unique=%s, inserted=%s, duplicates=%s",
+            "Импорт завершён: lines=%s, normalized=%s, unique=%s, inserted=%s, skipped=%s",
             stats.total_lines,
             stats.normalized_domains,
             stats.unique_domains,

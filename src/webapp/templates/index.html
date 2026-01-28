@@ -89,18 +89,6 @@
 
       <div class="card-body stack">
 
-        <details open>
-          <summary>Импорт доменов из файла <span class="pill"><span class="dot"></span>Celery</span></summary>
-          <div class="details-body stack">
-            <p class="hint">Путь берётся из конфигурации приложения.</p>
-            <div class="mono">{{ import_path }}</div>
-            <form method="post" action="/admin/import-file">
-              <input type="hidden" name="file_path" value="{{ import_path }}" />
-              <button class="btn primary" type="submit">Запустить импорт</button>
-            </form>
-          </div>
-        </details>
-
         <details>
           <summary>Аудит всех доменов <span class="pill"><span class="dot"></span>Celery</span></summary>
           <div class="details-body stack">

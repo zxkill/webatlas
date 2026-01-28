@@ -22,9 +22,7 @@ class RateLimitConfig:
 
 @dataclass(frozen=True)
 class ImportConfig:
-    api_url_template: str
-    token: str
-    max_domains: int
+    url_template: str
     file_path: str
 
 
@@ -104,9 +102,7 @@ def load_config(path: str = "config.yaml") -> AppConfig:
         db=DbConfig(url=db_section["url"]),
         rate_limit=RateLimitConfig(rps=float(rate_section["rps"])),
         import_cfg=ImportConfig(
-            api_url_template=import_section["api_url_template"],
-            token=import_section["token"],
-            max_domains=int(import_section["max_domains"]),
+            url_template=import_section["url_template"],
             file_path=import_section["file_path"],
         ),
         audit=AuditConfig(

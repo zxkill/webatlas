@@ -37,6 +37,7 @@ services:
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/1
       CELERY_BACKEND_URL: redis://redis:6379/2
+      APP_CONFIG_PATH: /app/config.yaml
     volumes:
       - ./src:/app/src
       - ./config.yaml:/app/config.yaml:ro
@@ -47,7 +48,7 @@ services:
       redis:
         condition: service_started
     # Авто-перезапуск celery при изменениях python-файлов (нужен пакет watchfiles)
-    command: sh -c "watchfiles --filter python & celery -A src.webapp_tasks:celery_app worker --loglevel=info"
+    command: sh -c "watchfiles --filter python & celery -A src.webapp_tasks:celery_app worker -B --loglevel=info"
 
   postgres:
     image: postgres:15-alpine

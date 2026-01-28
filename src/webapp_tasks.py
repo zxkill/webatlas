@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import logging
 from typing import Any, Iterable, Optional
+from src.webapp_import_zip import download_zip, extract_txt_from_zip
+from celery.schedules import crontab
+from src.config import load_config
 
 from celery import Celery
 
@@ -32,6 +35,17 @@ celery_app = Celery(
 )
 celery_app.conf.task_always_eager = config.celery_always_eager
 celery_app.conf.task_eager_propagates = True
+
+celery_app.conf.timezone = "Europe/Moscow"
+celery_app.conf.enable_utc = True
+
+celery_app.conf.beat_schedule = {
+    "nightly-import-domains-from-zip": {
+        "task": "webatlas.import_domains_from_zip",
+        "schedule": crontab(hour=3, minute=0),  # каждый день 03:00
+    }
+}
+
 
 
 def _normalize_modules(modules: Optional[Iterable[str]] | str) -> list[str] | None:
@@ -248,3 +262,27 @@ def audit_domain_task(self, *task_args: Any, **task_kwargs: Any) -> dict[str, in
     )
     processed = run_audit_and_persist([domain], db_state.session_factory, module_keys=normalized_modules)
     return {"processed": processed}
+
+@celery_app.task(name="webatlas.import_domains_from_zip")
+def import_domains_from_zip_task() -> dict[str, int]:
+    """
+    Ночной импорт: скачать ZIP по URL из конфига, извлечь TXT, импортировать домены.
+    """
+    app_cfg = load_config()
+    url = app_cfg.import_cfg.url_template
+
+    logger.info("Ночной импорт доменов из ZIP: %s", url)
+
+    zip_path = download_zip(url)
+    txt_path = extract_txt_from_zip(zip_path)
+
+    with db_state.session_factory() as session:
+        stats = import_domains_from_file(session, str(txt_path), source="zip")
+
+    return {
+        "total_lines": stats.total_lines,
+        "normalized_domains": stats.normalized_domains,
+        "unique_domains": stats.unique_domains,
+        "inserted_domains": stats.inserted_domains,
+        "skipped_duplicates": stats.skipped_duplicates,
+    }
