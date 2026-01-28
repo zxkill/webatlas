@@ -85,7 +85,11 @@ def _resolve_task_modules(
 
     # Логируем лишние аргументы, чтобы упростить диагностику.
     unexpected_args = () if consumed_all_positional else extra_args[1:]
-    unexpected_kwargs = {key: value for key, value in extra_kwargs.items() if key != "modules"}
+    unexpected_kwargs = {
+        key: value
+        for key, value in extra_kwargs.items()
+        if key not in {"modules", "domain"}
+    }
     if unexpected_args or unexpected_kwargs:
         logger.warning(
             "Обнаружены лишние аргументы audit_domain_task: args=%s kwargs=%s",
@@ -94,6 +98,43 @@ def _resolve_task_modules(
         )
 
     return _normalize_modules(resolved_modules)
+
+
+def _resolve_task_domain(
+    domain: Optional[str],
+    extra_args: tuple[Any, ...],
+    extra_kwargs: dict[str, Any],
+) -> str:
+    """
+    Разбирает домен из набора аргументов Celery-задачи.
+
+    Нам важно поддерживать разные схемы передачи (позиционные, kwargs),
+    чтобы UI и воркеры могли обновляться независимо.
+    """
+
+    resolved_domain = domain
+
+    if resolved_domain is None and extra_args:
+        resolved_domain = extra_args[0]
+        logger.warning("Домен передан позиционно, применяем обратную совместимость: %s", resolved_domain)
+
+    if resolved_domain is None and "domain" in extra_kwargs:
+        resolved_domain = extra_kwargs.get("domain")
+        logger.warning("Домен передан через kwargs, применяем обратную совместимость: %s", resolved_domain)
+
+    if not resolved_domain:
+        logger.error(
+            "Не удалось извлечь домен для аудита: args=%s kwargs_keys=%s",
+            list(extra_args),
+            list(extra_kwargs.keys()),
+        )
+        raise ValueError("Не задан домен для аудита")
+
+    if not isinstance(resolved_domain, str):
+        logger.error("Домен должен быть строкой, получено: %s", type(resolved_domain))
+        raise TypeError("Домен должен быть строкой")
+
+    return resolved_domain
 
 
 @celery_app.task(name="webatlas.add_domain")
@@ -151,26 +192,31 @@ def audit_limit_task(limit: int, modules: Optional[Iterable[str]] = None) -> dic
 
 
 @celery_app.task(name="webatlas.audit_domain")
-def audit_domain_task(
-    domain: str,
-    modules: Optional[Iterable[str]] = None,
-    *extra_args: Any,
-    **extra_kwargs: Any,
-) -> dict[str, int]:
+def audit_domain_task(*task_args: Any, **task_kwargs: Any) -> dict[str, int]:
     """
     Запускаем аудит конкретного домена.
 
     Принимаем extra_args/extra_kwargs для защиты от несовпадения сигнатур между UI и воркерами.
     """
 
-    # Извлекаем модули, чтобы ошибка в сигнатуре не падала без контекста.
-    normalized_modules = _resolve_task_modules(modules, extra_args, extra_kwargs)
+    # Разбираем домен и модули из любого допустимого набора аргументов.
+    # Это защищает от несовпадения сигнатур между версиями UI и воркеров.
+    domain = _resolve_task_domain(
+        task_kwargs.get("domain"),
+        task_args,
+        task_kwargs,
+    )
+    normalized_modules = _resolve_task_modules(
+        task_kwargs.get("modules"),
+        task_args[1:],
+        task_kwargs,
+    )
     logger.info(
         "Получена задача на аудит домена: %s (модули=%s, extra_args=%s, extra_kwargs_keys=%s)",
         domain,
         normalized_modules,
-        list(extra_args),
-        list(extra_kwargs.keys()),
+        list(task_args),
+        list(task_kwargs.keys()),
     )
     processed = run_audit_and_persist([domain], db_state.session_factory, module_keys=normalized_modules)
     return {"processed": processed}

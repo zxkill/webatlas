@@ -87,3 +87,42 @@ def test_audit_domain_task_accepts_kwargs(monkeypatch):
     assert result == {"processed": 1}
     assert captured["domains"] == ["example.com"]
     assert captured["module_keys"] == ["availability"]
+
+
+def test_audit_domain_task_accepts_positional(monkeypatch):
+    """
+    Проверяем, что задача аудита принимает позиционные аргументы.
+
+    Это нужно для совместимости со старыми клиентами/воркерами.
+    """
+
+    tasks_module = _load_tasks_module(monkeypatch)
+    captured = {}
+
+    def _fake_audit(domains, _session_factory, module_keys=None):
+        """Простейший стаб для контроля входных данных."""
+
+        captured["domains"] = domains
+        captured["module_keys"] = module_keys
+        return len(domains)
+
+    monkeypatch.setattr(tasks_module, "run_audit_and_persist", _fake_audit)
+
+    result = tasks_module.audit_domain_task("example.net", ["tls"])
+
+    assert result == {"processed": 1}
+    assert captured["domains"] == ["example.net"]
+    assert captured["module_keys"] == ["tls"]
+
+
+def test_resolve_domain_from_kwargs(monkeypatch):
+    """
+    Проверяем извлечение домена из kwargs.
+
+    Это важно для режима, когда UI передаёт именованные параметры.
+    """
+
+    tasks_module = _load_tasks_module(monkeypatch)
+
+    resolved = tasks_module._resolve_task_domain(None, (), {"domain": "example.org"})
+    assert resolved == "example.org"
