@@ -201,7 +201,11 @@ def audit_domain(domain: str = Form(...), modules: list[str] | None = Form(None)
     """Запускает аудит конкретного домена."""
 
     logger.info("Запуск аудита домена через админку: %s, modules=%s", domain, modules)
-    audit_domain_task.delay(domain, modules)
+    # Передаём домен позиционно, а модули — через заголовки:
+    # 1) Это устраняет ошибки, когда воркер ожидает только positional args.
+    # 2) Заголовки доступны внутри задачи и не конфликтуют с сигнатурой.
+    task_headers = {"modules": modules} if modules else None
+    audit_domain_task.apply_async(args=[domain], headers=task_headers)
     return RedirectResponse(url="/", status_code=303)
 
 
