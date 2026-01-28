@@ -201,7 +201,11 @@ def audit_domain(domain: str = Form(...), modules: list[str] | None = Form(None)
     """Запускает аудит конкретного домена."""
 
     logger.info("Запуск аудита домена через админку: %s, modules=%s", domain, modules)
-    audit_domain_task.delay(domain, modules)
+    # Передаём аргументы через kwargs:
+    # 1) UI и воркеры могут обновляться асинхронно, поэтому именованные параметры снижают риск
+    #    расхождения сигнатур и появления TypeError при запуске Celery-задачи.
+    # 2) Такой формат проще логировать и отлаживать в случае несовпадения версий.
+    audit_domain_task.apply_async(kwargs={"domain": domain, "modules": modules})
     return RedirectResponse(url="/", status_code=303)
 
 

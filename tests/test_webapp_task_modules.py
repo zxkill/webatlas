@@ -61,3 +61,29 @@ def test_resolve_modules_from_string(monkeypatch):
 
     resolved = tasks_module._resolve_task_modules("tls", (), {})
     assert resolved == ["tls"]
+
+
+def test_audit_domain_task_accepts_kwargs(monkeypatch):
+    """
+    Проверяем, что задача аудита принимает kwargs и корректно прокидывает модули.
+
+    Это защищает от ошибок при обновлении UI, который отправляет параметры по именам.
+    """
+
+    tasks_module = _load_tasks_module(monkeypatch)
+    captured = {}
+
+    def _fake_audit(domains, _session_factory, module_keys=None):
+        """Простейший стаб для контроля входных данных."""
+
+        captured["domains"] = domains
+        captured["module_keys"] = module_keys
+        return len(domains)
+
+    monkeypatch.setattr(tasks_module, "run_audit_and_persist", _fake_audit)
+
+    result = tasks_module.audit_domain_task(domain="example.com", modules=["availability"])
+
+    assert result == {"processed": 1}
+    assert captured["domains"] == ["example.com"]
+    assert captured["module_keys"] == ["availability"]
