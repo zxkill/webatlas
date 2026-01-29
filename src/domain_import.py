@@ -67,6 +67,7 @@ def import_domains_via_copy(
         inserted_domains = 0
 
         with raw_connection.cursor() as cursor:
+            cursor.execute("SET LOCAL synchronous_commit TO off;")
             # Шаг 1. Очищаем staging-таблицу перед каждой загрузкой.
             cursor.execute("TRUNCATE domains_staging;")
             log.debug("staging таблица очищена")
@@ -80,30 +81,27 @@ def import_domains_via_copy(
                 log.warning("Нет доменов для COPY после нормализации")
 
             # Шаг 3. Считаем статистику по staging.
-            cursor.execute("SELECT count(*) FROM domains_staging;")
-            normalized_in_db = int(cursor.fetchone()[0])
-            cursor.execute("SELECT count(DISTINCT domain) FROM domains_staging;")
-            unique_domains = int(cursor.fetchone()[0])
-            log.debug(
-                "Статистика staging: rows=%s unique=%s",
-                normalized_in_db,
-                unique_domains,
-            )
+            # cursor.execute("SELECT count(*) FROM domains_staging;")
+            # normalized_in_db = int(cursor.fetchone()[0])
+            # cursor.execute("SELECT count(DISTINCT domain) FROM domains_staging;")
+            # unique_domains = int(cursor.fetchone()[0])
+            # log.debug(
+            #     "Статистика staging: rows=%s unique=%s",
+            #     normalized_in_db,
+            #     unique_domains,
+            # )
 
             # Шаг 4. Вставляем только новые домены.
             cursor.execute(
                 """
-                WITH inserted AS (
-                    INSERT INTO domains (domain, source)
-                    SELECT domain, %s FROM domains_staging
-                    ON CONFLICT (domain) DO NOTHING
-                    RETURNING 1
-                )
-                SELECT count(*) FROM inserted;
+                INSERT INTO domains (domain, source)
+                SELECT domain, %s
+                FROM domains_staging
+                ON CONFLICT (domain) DO NOTHING;
                 """,
                 (source,),
             )
-            inserted_domains = int(cursor.fetchone()[0])
+            inserted_domains = int(cursor.rowcount or 0)
             log.info("INSERT завершён: inserted=%s", inserted_domains)
 
         raw_connection.commit()
