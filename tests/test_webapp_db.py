@@ -16,6 +16,7 @@ from src.webapp_db import (
     DomainCms,
     create_db_state,
     create_domain,
+    domains_staging_table,
     get_domain_report,
     import_domains_from_file,
     init_db,
@@ -37,6 +38,7 @@ def _get_test_dsn() -> str:
 
 def _cleanup(session) -> None:
     # Очищаем таблицы, чтобы тесты не зависели друг от друга.
+    session.execute(domains_staging_table.delete())
     session.query(DomainCheck).delete()
     session.query(DomainCms).delete()
     session.query(AdminPanel).delete()

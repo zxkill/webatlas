@@ -11,6 +11,7 @@ from sqlalchemy import (
     ForeignKey,
     Integer,
     String,
+    Table,
     Text,
     UniqueConstraint,
     create_engine,
@@ -19,11 +20,20 @@ from sqlalchemy import (
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, declarative_base, relationship, sessionmaker
 
-from src.domain_utils import load_domains_from_file
+from src.domain_import import import_domains_via_copy
 
 logger = logging.getLogger(__name__)
 
 Base = declarative_base()
+
+
+# Временная staging-таблица для быстрого COPY-импорта доменов.
+# Важно: без первичного ключа и индексов, чтобы загрузка была максимально быстрой.
+domains_staging_table = Table(
+    "domains_staging",
+    Base.metadata,
+    Column("domain", Text, nullable=False),
+)
 
 
 class Domain(Base):
@@ -368,23 +378,24 @@ def update_domain_cms(session: Session, domain: str, cms_key: str, cms_name: str
 def import_domains_from_file(session: Session, path: str, source: str = "file") -> FileImportStats:
     """Импортируем домены из файла и возвращаем статистику."""
 
-    logger.info("Запуск импорта доменов через админку: %s", path)
-    domains = load_domains_from_file(path)
-    unique_domains = set(domains)
-    inserted = 0
-    for domain in unique_domains:
-        create_domain(session, domain, source=source)
-        inserted += 1
+    logger.info("Запуск быстрого импорта доменов через админку: %s", path)
+
+    # Используем прямое соединение DB-API, чтобы выполнить COPY максимально быстро.
+    raw_connection = session.get_bind().raw_connection()
+    try:
+        copy_stats = import_domains_via_copy(raw_connection, path, source, log=logger)
+    finally:
+        raw_connection.close()
 
     stats = FileImportStats(
-        total_lines=_count_lines(path),
-        normalized_domains=len(domains),
-        unique_domains=len(unique_domains),
-        inserted_domains=inserted,
-        skipped_duplicates=len(domains) - len(unique_domains),
+        total_lines=copy_stats.total_lines,
+        normalized_domains=copy_stats.normalized_domains,
+        unique_domains=copy_stats.unique_domains,
+        inserted_domains=copy_stats.inserted_domains,
+        skipped_duplicates=copy_stats.skipped_duplicates,
     )
     logger.info(
-        "Импорт завершён: lines=%s normalized=%s unique=%s inserted=%s duplicates=%s",
+        "Импорт завершён: lines=%s normalized=%s unique=%s inserted=%s skipped=%s",
         stats.total_lines,
         stats.normalized_domains,
         stats.unique_domains,
@@ -449,9 +460,3 @@ def get_domain_report(session: Session, domain: str) -> Optional[dict]:
     logger.info("Сформирован отчёт по домену: %s", normalized)
     return report
 
-
-def _count_lines(path: str) -> int:
-    """Вспомогательная функция для подсчёта строк в файле."""
-
-    with open(path, "r", encoding="utf-8") as handle:
-        return sum(1 for _ in handle)

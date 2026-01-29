@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import logging
+import os
+from pathlib import Path
 from typing import Any, Iterable, Optional
+
+from src.domain_import import import_domains_via_copy
 from src.webapp_import_zip import download_zip, extract_txt_from_zip
 from celery.schedules import crontab
 from src.config import load_config
@@ -13,7 +17,6 @@ from src.webapp_config import load_webapp_config
 from src.webapp_db import (
     create_db_state,
     create_domain,
-    import_domains_from_file,
     init_db,
     list_domains,
 )
@@ -276,8 +279,17 @@ def import_domains_from_zip_task() -> dict[str, int]:
     zip_path = download_zip(url)
     txt_path = extract_txt_from_zip(zip_path)
 
-    with db_state.session_factory() as session:
-        stats = import_domains_from_file(session, str(txt_path), source="zip")
+    try:
+        # Используем сырое DB-API соединение, чтобы выполнить COPY максимально быстро.
+        raw_connection = db_state.engine.raw_connection()
+        try:
+            stats = import_domains_via_copy(raw_connection, str(txt_path), source="zip", log=logger)
+        finally:
+            # Закрываем подключение в любом случае, чтобы не держать открытые коннекты.
+            raw_connection.close()
+    finally:
+        # Очищаем временные файлы импорта.
+        _cleanup_import_files(zip_path, txt_path)
 
     return {
         "total_lines": stats.total_lines,
@@ -286,3 +298,27 @@ def import_domains_from_zip_task() -> dict[str, int]:
         "inserted_domains": stats.inserted_domains,
         "skipped_duplicates": stats.skipped_duplicates,
     }
+
+
+def _cleanup_import_files(zip_path: Path, txt_path: Path) -> None:
+    """
+    Удаляет временные файлы, созданные при ночном импорте, чтобы не копить мусор.
+    """
+
+    for path in (txt_path, zip_path):
+        try:
+            os.unlink(path)
+            logger.debug("Временный файл удалён: %s", path)
+        except FileNotFoundError:
+            logger.warning("Временный файл уже отсутствует: %s", path)
+        except OSError:
+            logger.exception("Не удалось удалить временный файл: %s", path)
+
+    # Пытаемся удалить временную директорию, если TXT лежит в отдельной папке.
+    try:
+        temp_dir = txt_path.parent
+        if temp_dir.exists() and temp_dir.is_dir():
+            temp_dir.rmdir()
+            logger.debug("Временная директория удалена: %s", temp_dir)
+    except OSError:
+        logger.debug("Временная директория не удалена (возможно, уже пуста/используется)")
