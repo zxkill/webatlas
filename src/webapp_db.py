@@ -206,7 +206,7 @@ def create_domain(session: Session, domain: str, source: str = "manual") -> Doma
 
     record = Domain(domain=normalized, source=source)
     session.add(record)
-    session.commit()
+    session.flush()
     session.refresh(record)
     logger.info("Создан новый домен: %s", normalized)
     return record
