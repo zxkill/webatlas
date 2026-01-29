@@ -8,7 +8,7 @@ pytest.importorskip("sqlalchemy")
 
 from src.db import Database
 from src.importer_file import DomainFileImporter
-from src.webapp_db import AdminPanel, Check, Cms, Domain, DomainCheck, DomainCms
+from src.webapp_db import AdminPanel, Check, Cms, Domain, DomainCheck, DomainCms, domains_staging_table
 
 
 # Проверяем импорт доменов из файла на PostgreSQL. Пропускаем без DSN.
@@ -23,6 +23,7 @@ def _get_test_dsn() -> str:
 def _cleanup(db: Database) -> None:
     # Очищаем таблицы доменов для изоляции тестов.
     session = db._session
+    session.execute(domains_staging_table.delete())
     session.query(DomainCheck).delete()
     session.query(DomainCms).delete()
     session.query(AdminPanel).delete()

@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Generator
 
 from .db import Database
-from .domain_utils import load_domains_from_file
+from .domain_import import import_domains_via_copy
 
 logger = logging.getLogger(__name__)
 
@@ -18,10 +17,6 @@ class FileImportStats:
     inserted_domains: int
     skipped_duplicates: int
 
-def _chunks(items: list[str], size: int) -> Generator[list[str], Any, None]:
-    for i in range(0, len(items), size):
-        yield items[i:i+size]
-
 class DomainFileImporter:
     """
     Импорт доменов из текстового файла.
@@ -31,33 +26,26 @@ class DomainFileImporter:
     def __init__(self, db_url: str) -> None:
         self._db_url = db_url
 
-    def run(self, path: str, source: str = "file", batch_size: int = 5000) -> FileImportStats:
-        logger.info("Импорт доменов из файла: %s", path)
-        domains = load_domains_from_file(path)
-        unique_domains = sorted(set(domains))
-        logger.info("Найдено доменов: всего=%s, уникальных=%s", len(domains), len(unique_domains))
+    def run(self, path: str, source: str = "file", batch_size: int = 5000) -> FileImportStats:  # noqa: ARG002
+        logger.info("Импорт доменов из файла (ускоренный режим): %s", path)
 
+        # Открываем БД через общий класс-обёртку, чтобы повторно использовать настройки.
         db = Database(self._db_url)
-
-        inserted = 0
-        already_in_db = 0
-
-        for batch in _chunks(unique_domains, batch_size):
-            existing = db.fetch_existing_domains(batch)  # пачкой
-            to_insert = [d for d in batch if d not in existing]
-
-            already_in_db += (len(batch) - len(to_insert))
-            inserted += db.insert_domains(to_insert, source=source)  # пачкой
-
-        db.commit()
-        db.close()
+        # Берём сырой DB-API коннект, так как COPY работает быстрее всех ORM/SQLAlchemy подходов.
+        raw_connection = db._state.engine.raw_connection()
+        try:
+            copy_stats = import_domains_via_copy(raw_connection, path, source, log=logger)
+        finally:
+            # Всегда закрываем соединение и освобождаем ресурсы.
+            raw_connection.close()
+            db.close()
 
         stats = FileImportStats(
-            total_lines=_count_lines(path),
-            normalized_domains=len(domains),
-            unique_domains=len(unique_domains),
-            inserted_domains=inserted,
-            skipped_duplicates=(len(domains) - len(unique_domains)) + already_in_db,
+            total_lines=copy_stats.total_lines,
+            normalized_domains=copy_stats.normalized_domains,
+            unique_domains=copy_stats.unique_domains,
+            inserted_domains=copy_stats.inserted_domains,
+            skipped_duplicates=copy_stats.skipped_duplicates,
         )
         logger.info(
             "Импорт завершён: lines=%s, normalized=%s, unique=%s, inserted=%s, skipped=%s",
@@ -68,12 +56,3 @@ class DomainFileImporter:
             stats.skipped_duplicates,
         )
         return stats
-
-
-def _count_lines(path: str) -> int:
-    """
-    Вспомогательная функция: количество строк в файле, чтобы вести статистику.
-    """
-
-    with open(path, "r", encoding="utf-8") as handle:
-        return sum(1 for _ in handle)
