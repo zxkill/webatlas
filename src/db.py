@@ -4,8 +4,6 @@ import logging
 import time
 from dataclasses import dataclass
 from typing import Optional
-from sqlalchemy import select
-from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -234,24 +232,3 @@ class Database:
         if limit is not None:
             query = query.limit(limit)
         return [record.domain for record in query.all()]
-
-    def fetch_existing_domains(self, domains: list[str]) -> set[str]:
-        if not domains:
-            return set()
-        stmt = select(Domain.domain).where(Domain.domain.in_(domains))
-        rows = self._session.execute(stmt).all()
-        return {r[0] for r in rows}
-
-    def insert_domains(self, domains: list[str], source: str) -> int:
-        if not domains:
-            return 0
-
-        values = [{"domain": d, "source": source} for d in domains]
-
-        stmt = pg_insert(Domain).values(values)
-        # чтобы не падать на дублях
-        stmt = stmt.on_conflict_do_nothing(index_elements=[Domain.domain])
-        result = self._session.execute(stmt)
-
-        # result.rowcount для DO NOTHING обычно возвращает число реально вставленных строк
-        return int(result.rowcount or 0)
