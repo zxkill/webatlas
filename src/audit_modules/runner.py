@@ -50,6 +50,16 @@ async def run_modules_for_domain(
         summary.merge(result, module_key)
         executed.add(module_key)
 
+        # Если модуль доступности показал недоступность, прекращаем дальнейший аудит домена.
+        if module_key == "availability":
+            availability = context.data.get("availability", {})
+            if not availability.get("reachable", False):
+                logger.info(
+                    "Останавливаем аудит домена %s: сайт недоступен, остальные модули пропущены",
+                    context.domain,
+                )
+                break
+
         # Динамически подключаем дополнительные модули (например, для CMS).
         for extra_key in result.additional_modules:
             if extra_key not in executed:

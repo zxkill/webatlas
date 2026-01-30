@@ -37,33 +37,51 @@ class AvailabilityModule:
         homepage = None
 
         for scheme in ("https", "http"):
+            # Собираем базовый URL без лишних параметров, чтобы лог был лаконичным.
             url = _ensure_url(scheme, context.domain, "/")
             logger.debug("[availability] проверяем %s", url)
             response = await context.http.fetch(context.session, url, allow_redirects=True)
             if response is None:
-                evidence["checked"][scheme] = {"ok": False}
-                logger.info("[availability] домен %s недоступен по %s", context.domain, scheme)
+                # Фиксируем факт сетевой ошибки/таймаута, чтобы позже было проще разбирать причины.
+                evidence["checked"][scheme] = {"ok": False, "reason": "request_failed"}
+                logger.info("[availability] домен %s недоступен по %s: нет ответа", context.domain, scheme)
                 continue
 
+            # Проверяем строгий HTTP 200: только такой ответ считаем доступностью.
+            is_available = response.status == 200
             evidence["checked"][scheme] = {
-                "ok": True,
+                "ok": is_available,
                 "status": response.status,
                 "final_url": response.final_url,
             }
+            if not is_available:
+                # Статусы отличные от 200 считаем недоступностью, но продолжаем проверку второго протокола.
+                logger.info(
+                    "[availability] домен %s недоступен по %s: статус=%s",
+                    context.domain,
+                    scheme,
+                    response.status,
+                )
+                continue
+
+            # Сохраняем данные первого успешного ответа, чтобы остальные модули могли использовать их.
             homepage = response
             used_scheme = scheme
             set_cookie_agg = response.headers.get("Set-Cookie", "")
             logger.info(
-                "[availability] домен %s доступен по %s, статус=%s",
+                "[availability] домен %s доступен по %s, статус=200",
                 context.domain,
                 scheme,
-                response.status,
             )
             break
 
         if homepage is None:
-            evidence["error"] = "unreachable"
-            logger.warning("[availability] домен %s недоступен по HTTP/HTTPS", context.domain)
+            # Если по HTTP/HTTPS не удалось получить статус 200, считаем домен недоступным.
+            evidence["error"] = "no_http_200"
+            logger.warning(
+                "[availability] домен %s недоступен по HTTP/HTTPS: нет ответа 200",
+                context.domain,
+            )
             context.data["availability"] = {
                 "reachable": False,
                 "used_scheme": None,

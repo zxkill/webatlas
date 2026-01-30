@@ -18,9 +18,7 @@ def _make_config() -> AppConfig:
         db=DbConfig(url="postgresql://user:pass@localhost/db"),
         rate_limit=RateLimitConfig(rps=1.0),
         import_cfg=ImportConfig(
-            api_url_template="https://example.test?page={page}&token={token}",
-            token="token",
-            max_domains=1,
+            url_template="https://example.test?page={page}&token={token}",
             file_path="domains.txt",
         ),
         audit=AuditConfig(concurrency=1, timeouts=AuditTimeouts(total=1)),
@@ -66,3 +64,46 @@ def test_run_modules_for_domain_adds_dynamic_modules(monkeypatch) -> None:
     summary = asyncio.run(run_modules_for_domain(context, selected_modules=None))
 
     assert summary.executed_modules == ["base", "extra"]
+
+
+class _AvailabilityStopModule:
+    key = "availability"
+    name = "Availability"
+    description = "availability"
+    depends_on = ()
+
+    async def run(self, context: AuditContext) -> ModuleResult:
+        # Явно отмечаем недоступность, чтобы runner остановил цепочку модулей.
+        context.data["availability"] = {"reachable": False}
+        return ModuleResult()
+
+
+class _SkippedModule:
+    key = "skipped"
+    name = "Skipped"
+    description = "skipped"
+    depends_on = ()
+
+    async def run(self, context: AuditContext) -> ModuleResult:
+        # Если этот модуль выполнится, значит остановка не сработала.
+        return ModuleResult()
+
+
+def test_run_modules_for_domain_stops_after_unreachable(monkeypatch) -> None:
+    # Подменяем реестр и план, чтобы проверить остановку после модуля доступности.
+    import src.audit_modules.runner as runner
+
+    registry = {"availability": _AvailabilityStopModule(), "skipped": _SkippedModule()}
+    monkeypatch.setattr(runner, "get_registry", lambda: registry)
+    monkeypatch.setattr(runner, "resolve_module_plan", lambda selected: ["availability", "skipped"])
+
+    context = AuditContext(
+        domain="example.com",
+        session=SimpleNamespace(),
+        http=HttpClient(rps=1, total_timeout_s=1),
+        config=_make_config(),
+    )
+
+    summary = asyncio.run(run_modules_for_domain(context, selected_modules=None))
+
+    assert summary.executed_modules == ["availability"]
