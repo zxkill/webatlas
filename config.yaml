@@ -2,13 +2,13 @@ db:
   url: "postgresql+psycopg2://webatlas:webatlas@postgres:5432/webatlas"
 
 rate_limit:
-  rps: 10
+  rps: 100000
 
 import:
   url_template: "https://purecrawl.com/domains/ru.txt.zip"
   file_path: "domains.txt"
 
 audit:
-  concurrency: 6                    # параллельность
+  concurrency: 100000                   # параллельность
   timeouts:
     total: 10                       # секунд, общий таймаут на запрос
