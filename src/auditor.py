@@ -12,6 +12,7 @@ from src.config import AppConfig
 from src.db import Database
 from src.webapp_db import ModuleRunRow
 from src.http import HttpClient
+from src.audit_modules.registry import get_registry
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +74,15 @@ class Auditor:
 
 def _persist_summary(db: Database, domain: str, summary: ModuleRunSummary) -> None:
     """Сохраняет результаты модулей в базу данных через Database."""
+
+    registry = get_registry()
+    # Сохраняем модульные результаты через методы самих модулей.
+    for module_output in summary.module_outputs:
+        module = registry.get(module_output.module_key)
+        if module is None:
+            logger.warning("Модуль %s отсутствует в реестре при сохранении", module_output.module_key)
+            continue
+        module.persist(db._session, domain, module_output.payload)
 
     # Сохраняем результат запуска каждого модуля отдельной записью.
     for module_run in summary.module_runs:

@@ -227,6 +227,12 @@ def create_db_state(database_url: str) -> DbState:
 def init_db(state: DbState) -> None:
     """Создаём таблицы, если их ещё нет."""
 
+    # Подгружаем модули аудита заранее, чтобы их таблицы зарегистрировались в Base.metadata.
+    # Это гарантирует, что create_all создаст таблицы модулей при старте приложения.
+    try:
+        from src.audit_modules import registry  # noqa: F401
+    except Exception:  # noqa: BLE001 - не ломаем запуск из-за ошибки импорта
+        logger.exception("Не удалось импортировать audit_modules перед созданием схемы")
     logger.info("Запуск миграций (create_all) для схемы веб-приложения")
     Base.metadata.create_all(state.engine)
 
@@ -520,6 +526,16 @@ def get_domain_report(session: Session, domain: str) -> Optional[dict]:
         for item in record.module_runs
     ]
 
+    # Формируем блоки отчёта из каждого модуля, чтобы UI был модульным.
+    module_blocks = []
+    try:
+        from src.audit_modules.registry import list_modules
+
+        for module in list_modules():
+            module_blocks.append(module.build_report_block(session, normalized))
+    except Exception:  # noqa: BLE001 - важно не ломать отчёт из-за одного модуля
+        logger.exception("Ошибка формирования модульных блоков отчёта для домена: %s", normalized)
+
     report = {
         "domain": record.domain,
         "source": record.source,
@@ -529,6 +545,7 @@ def get_domain_report(session: Session, domain: str) -> Optional[dict]:
         "cms": cms_payload,
         "admin_panels": admin_payload,
         "module_runs": module_runs_payload,
+        "module_blocks": module_blocks,
     }
     logger.info("Сформирован отчёт по домену: %s", normalized)
     return report

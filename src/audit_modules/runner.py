@@ -7,7 +7,13 @@ from collections import deque
 from collections.abc import Iterable
 
 from src.audit_modules.registry import get_registry, resolve_module_plan
-from src.audit_modules.types import AuditContext, ModuleResult, ModuleRunSummary, ModuleRunUpdate
+from src.audit_modules.types import (
+    AuditContext,
+    ModuleOutput,
+    ModuleResult,
+    ModuleRunSummary,
+    ModuleRunUpdate,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +89,13 @@ async def run_modules_for_domain(
                 duration_ms=duration_ms,
                 detail_json=json.dumps(detail_payload, ensure_ascii=False),
                 error_message=error_message,
+            )
+        )
+        summary.add_module_output(
+            ModuleOutput(
+                module_key=module_key,
+                module_name=module.name,
+                payload=list(result.module_payload),
             )
         )
 

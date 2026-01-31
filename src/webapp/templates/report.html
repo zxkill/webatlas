@@ -17,10 +17,7 @@
     </div>
   </div>
 {% else %}
-  {% set checks = report.checks or report.get('checks') or [] %}
-  {% set cms = report.cms or report.get('cms') or [] %}
-  {% set admin_panels = report.admin_panels or report.get('admin_panels') or [] %}
-  {% set module_runs = report.module_runs or report.get('module_runs') or [] %}
+  {% set module_blocks = report.module_blocks or report.get('module_blocks') or [] %}
 
   <div class="card" style="margin-top:14px;">
     <div class="card-header">
@@ -41,132 +38,46 @@
   </div>
 
   <div class="grid" style="margin-top:16px; grid-template-columns: 1fr;">
-    <div class="card">
-      <div class="card-header">
-        <div>
-          <p class="card-title">Модули</p>
-          <p class="card-subtitle">История запусков и статусы выполнения.</p>
+    {% if module_blocks %}
+      {% for block in module_blocks %}
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <p class="card-title">{{ block.name if block.name is defined else block.get('name','') }}</p>
+              <p class="card-subtitle">{{ block.description if block.description is defined else block.get('description','') }}</p>
+            </div>
+            <span class="pill"><span class="dot"></span>{{ (block.entries if block.entries is defined else block.get('entries',[])) | length }} шт.</span>
+          </div>
+          <div class="card-body">
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Время</th><th>Статус</th><th>Результат</th></tr></thead>
+                <tbody>
+                  {% set entries = block.entries if block.entries is defined else block.get('entries', []) %}
+                  {% if entries %}
+                    {% for entry in entries %}
+                      <tr>
+                        <td class="mono">{{ entry.timestamp if entry.timestamp is defined else entry.get('timestamp','') }}</td>
+                        <td>{{ status_pill(entry.status if entry.status is defined else entry.get('status')) }}</td>
+                        <td>{{ entry.message if entry.message is defined else entry.get('message','') }}</td>
+                      </tr>
+                    {% endfor %}
+                  {% else %}
+                    <tr><td colspan="3">{{ block.empty_message if block.empty_message is defined else block.get('empty_message','Данных пока нет') }}</td></tr>
+                  {% endif %}
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
-        <span class="pill"><span class="dot"></span>{{ module_runs|length }} шт.</span>
-      </div>
-      <div class="card-body">
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>Модуль</th><th>Ключ</th><th>Статус</th><th>Длительность</th><th>Ошибка</th></tr></thead>
-            <tbody>
-              {% if module_runs %}
-                {% for run in module_runs %}
-                  <tr>
-                    <td>{{ run.module_name if run.module_name is defined else run.get('module_name','') }}</td>
-                    <td class="mono">{{ run.module_key if run.module_key is defined else run.get('module_key','') }}</td>
-                    <td>{{ status_pill(run.status if run.status is defined else run.get('status')) }}</td>
-                    <td class="mono">
-                      {{ run.duration_ms if run.duration_ms is defined else run.get('duration_ms','') }} ms
-                    </td>
-                    <td class="mono">
-                      {{ run.error_message if run.error_message is defined else run.get('error_message','') }}
-                    </td>
-                  </tr>
-                {% endfor %}
-              {% else %}
-                <tr><td colspan="5">Данных пока нет</td></tr>
-              {% endif %}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="card-header">
-        <div>
-          <p class="card-title">Проверки</p>
-          <p class="card-subtitle">Сводные результаты по модулям.</p>
-        </div>
-        <span class="pill"><span class="dot"></span>{{ checks|length }} шт.</span>
-      </div>
-      <div class="card-body">
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>Ключ</th><th>Статус</th><th>Score</th></tr></thead>
-            <tbody>
-              {% if checks %}
-                {% for c in checks %}
-                  <tr>
-                    <td class="mono">{{ c.key or c.get('key','') }}</td>
-                    <td>{{ status_pill(c.status if c.status is defined else c.get('status')) }}</td>
-                    <td class="mono">{{ c.score if c.score is defined else c.get('score','') }}</td>
-                  </tr>
-                {% endfor %}
-              {% else %}
-                <tr><td colspan="3">Данных пока нет</td></tr>
-              {% endif %}
-            </tbody>
-          </table>
+      {% endfor %}
+    {% else %}
+      <div class="card">
+        <div class="card-body">
+          <p class="hint">Данных по модулям пока нет.</p>
         </div>
       </div>
-    </div>
-
-    <div class="card">
-      <div class="card-header">
-        <div>
-          <p class="card-title">CMS</p>
-          <p class="card-subtitle">Определение CMS/фреймворка.</p>
-        </div>
-        <span class="pill"><span class="dot"></span>{{ cms|length }} шт.</span>
-      </div>
-      <div class="card-body">
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>Название</th><th>Ключ</th><th>Статус</th><th>Confidence</th></tr></thead>
-            <tbody>
-              {% if cms %}
-                {% for x in cms %}
-                  <tr>
-                    <td>{{ x.name if x.name is defined else x.get('name','') }}</td>
-                    <td class="mono">{{ x.key if x.key is defined else x.get('key','') }}</td>
-                    <td>{{ status_pill(x.status if x.status is defined else x.get('status')) }}</td>
-                    <td class="mono">{{ x.confidence if x.confidence is defined else x.get('confidence','') }}</td>
-                  </tr>
-                {% endfor %}
-              {% else %}
-                <tr><td colspan="4">Данных пока нет</td></tr>
-              {% endif %}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="card-header">
-        <div>
-          <p class="card-title">Админ-панели</p>
-          <p class="card-subtitle">Результаты по известным путям админок.</p>
-        </div>
-        <span class="pill"><span class="dot"></span>{{ admin_panels|length }} шт.</span>
-      </div>
-      <div class="card-body">
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>Ключ</th><th>Статус</th><th>HTTP</th></tr></thead>
-            <tbody>
-              {% if admin_panels %}
-                {% for a in admin_panels %}
-                  <tr>
-                    <td class="mono">{{ a.panel_key if a.panel_key is defined else a.get('panel_key','') }}</td>
-                    <td>{{ status_pill(a.status if a.status is defined else a.get('status')) }}</td>
-                    <td class="mono">{{ a.http_status if a.http_status is defined else a.get('http_status','') }}</td>
-                  </tr>
-                {% endfor %}
-              {% else %}
-                <tr><td colspan="3">Данных пока нет</td></tr>
-              {% endif %}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
+    {% endif %}
   </div>
 {% endif %}
 {% endblock %}

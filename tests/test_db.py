@@ -8,6 +8,10 @@ pytest.importorskip("sqlalchemy")
 
 from src.db import AdminPanelRow, CheckRow, Database
 from src.webapp_db import AdminPanel, Check, Cms, Domain, DomainCheck, DomainCms, ModuleRun, ModuleRunRow
+from src.audit_modules.availability import AvailabilityCheck
+from src.audit_modules.bitrix_admin import BitrixAdminCheck
+from src.audit_modules.bitrix_detect import BitrixDetectCheck
+from src.audit_modules.tls_certificate import TlsCertificateCheck
 
 
 # Проверяем основные операции БД на PostgreSQL. Тест пропускается без DSN.
@@ -26,6 +30,10 @@ def _cleanup(db: Database) -> None:
     session.query(DomainCms).delete()
     session.query(AdminPanel).delete()
     session.query(ModuleRun).delete()
+    session.query(AvailabilityCheck).delete()
+    session.query(BitrixDetectCheck).delete()
+    session.query(BitrixAdminCheck).delete()
+    session.query(TlsCertificateCheck).delete()
     session.query(Check).delete()
     session.query(Cms).delete()
     session.query(Domain).delete()

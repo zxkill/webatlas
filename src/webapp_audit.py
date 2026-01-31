@@ -6,6 +6,7 @@ from typing import Iterable, Optional
 
 import aiohttp
 
+from src.audit_modules.registry import get_registry
 from src.audit_modules.runner import run_modules_for_domain
 from src.audit_modules.types import AuditContext, ModuleRunSummary
 from src.config import load_config
@@ -70,6 +71,14 @@ def _persist_summary(domain: str, summary: ModuleRunSummary, session_factory) ->
     """Сохраняет результаты модулей в базе данных."""
 
     with session_factory() as session:
+        registry = get_registry()
+        # Сохраняем модульные результаты через методы самих модулей.
+        for module_output in summary.module_outputs:
+            module = registry.get(module_output.module_key)
+            if module is None:
+                logger.warning("Модуль %s отсутствует в реестре при сохранении", module_output.module_key)
+                continue
+            module.persist(session, domain, module_output.payload)
         # Фиксируем каждый запуск модуля отдельной записью для прозрачного аудита.
         for module_run in summary.module_runs:
             update_module_run(

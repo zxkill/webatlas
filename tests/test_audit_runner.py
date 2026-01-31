@@ -66,6 +66,7 @@ def test_run_modules_for_domain_adds_dynamic_modules(monkeypatch) -> None:
     assert summary.executed_modules == ["base", "extra"]
     assert [item.module_key for item in summary.module_runs] == ["base", "extra"]
     assert all(item.status == "success" for item in summary.module_runs)
+    assert [item.module_key for item in summary.module_outputs] == ["base", "extra"]
 
 
 class _AvailabilityStopModule:
@@ -131,6 +132,7 @@ def test_run_modules_for_domain_stops_after_unreachable(monkeypatch) -> None:
 
     assert summary.executed_modules == ["availability"]
     assert [item.module_key for item in summary.module_runs] == ["availability"]
+    assert [item.module_key for item in summary.module_outputs] == ["availability"]
 
 
 def test_run_modules_for_domain_records_failures(monkeypatch) -> None:
@@ -153,3 +155,4 @@ def test_run_modules_for_domain_records_failures(monkeypatch) -> None:
     assert summary.executed_modules == ["broken", "after"]
     assert [item.module_key for item in summary.module_runs] == ["broken", "after"]
     assert summary.module_runs[0].status == "error"
+    assert [item.module_key for item in summary.module_outputs] == ["broken", "after"]

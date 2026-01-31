@@ -28,6 +28,10 @@ from src.webapp_db import (
     update_domain_cms,
     update_module_run,
 )
+from src.audit_modules.availability import AvailabilityCheck, AvailabilityModule
+from src.audit_modules.bitrix_admin import BitrixAdminCheck
+from src.audit_modules.bitrix_detect import BitrixDetectCheck
+from src.audit_modules.tls_certificate import TlsCertificateCheck
 
 
 # Тестируем базовый CRUD для доменов и отчёта на PostgreSQL.
@@ -46,6 +50,10 @@ def _cleanup(session) -> None:
     session.query(DomainCms).delete()
     session.query(AdminPanel).delete()
     session.query(ModuleRun).delete()
+    session.query(AvailabilityCheck).delete()
+    session.query(BitrixDetectCheck).delete()
+    session.query(BitrixAdminCheck).delete()
+    session.query(TlsCertificateCheck).delete()
     session.query(Check).delete()
     session.query(Cms).delete()
     session.query(Domain).delete()
@@ -86,6 +94,21 @@ def test_webapp_db_create_and_report():
                 detail_json='{"check_updates": 1}',
             ),
         )
+        # Добавляем модульные данные через модуль доступности, чтобы проверить отчёт блоками.
+        AvailabilityModule().persist(
+            session,
+            "example.com",
+            [
+                {
+                    "checked_ts": 1,
+                    "scheme": "https",
+                    "status": "yes",
+                    "http_status": 200,
+                    "final_url": "https://example.com/",
+                    "evidence_json": "{}",
+                }
+            ],
+        )
         report = get_domain_report(session, "example.com")
 
     assert report is not None
@@ -94,6 +117,7 @@ def test_webapp_db_create_and_report():
     assert report["admin_panels"][0]["status"] == "yes"
     assert report["cms"][0]["key"] == "bitrix"
     assert report["module_runs"][0]["module_key"] == "availability"
+    assert report["module_blocks"][0]["entries"]
 
 
 # Проверяем импорт доменов из файла.
