@@ -7,7 +7,7 @@ import pytest
 pytest.importorskip("sqlalchemy")
 
 from src.db import AdminPanelRow, CheckRow, Database
-from src.webapp_db import AdminPanel, Check, Cms, Domain, DomainCheck, DomainCms
+from src.webapp_db import AdminPanel, Check, Cms, Domain, DomainCheck, DomainCms, ModuleRun, ModuleRunRow
 
 
 # Проверяем основные операции БД на PostgreSQL. Тест пропускается без DSN.
@@ -25,6 +25,7 @@ def _cleanup(db: Database) -> None:
     session.query(DomainCheck).delete()
     session.query(DomainCms).delete()
     session.query(AdminPanel).delete()
+    session.query(ModuleRun).delete()
     session.query(Check).delete()
     session.query(Cms).delete()
     session.query(Domain).delete()
@@ -67,6 +68,18 @@ def test_db_upsert_and_update_check() -> None:
         10,
         json.dumps({"score": 10}, ensure_ascii=False),
     )
+    db.update_module_run(
+        "example.com",
+        ModuleRunRow(
+            module_key="availability",
+            module_name="Availability",
+            status="success",
+            started_ts=1,
+            finished_ts=2,
+            duration_ms=100,
+            detail_json=json.dumps({"ok": True}, ensure_ascii=False),
+        ),
+    )
     db.commit()
 
     # Проверяем, что домен в БД присутствует и уникален.
@@ -84,5 +97,8 @@ def test_db_upsert_and_update_check() -> None:
     # Проверяем связь домена с CMS.
     cms_record = db._session.query(DomainCms).one()
     assert (cms_record.status, cms_record.confidence) == ("yes", 10)
+
+    module_run_record = db._session.query(ModuleRun).one()
+    assert module_run_record.module_key == "availability"
 
     db.close()

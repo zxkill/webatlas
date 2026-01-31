@@ -17,6 +17,8 @@ from src.webapp_db import (
     Domain,
     DomainCheck,
     DomainCms,
+    ModuleRun,
+    ModuleRunRow,
     create_db_state,
     init_db,
 )
@@ -222,6 +224,36 @@ class Database:
                 )
             )
         logger.info("Обновлены данные CMS %s для домена %s", cms_key, domain)
+
+    def update_module_run(self, domain: str, row: ModuleRunRow) -> None:
+        """
+        Фиксирует запуск модуля в таблице module_runs.
+        """
+
+        domain_id = self._get_domain_id(domain)
+        if domain_id is None:
+            logger.warning("Домен не найден при фиксации модуля: %s", domain)
+            return
+
+        self._session.add(
+            ModuleRun(
+                domain_id=domain_id,
+                module_key=row.module_key,
+                module_name=row.module_name,
+                status=row.status,
+                started_ts=row.started_ts,
+                finished_ts=row.finished_ts,
+                duration_ms=row.duration_ms,
+                detail_json=row.detail_json,
+                error_message=row.error_message,
+            )
+        )
+        logger.info(
+            "Зафиксирован запуск модуля %s для домена %s (status=%s)",
+            row.module_key,
+            domain,
+            row.status,
+        )
 
     def load_domains(self, limit: int | None = None) -> list[str]:
         """

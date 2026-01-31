@@ -66,6 +66,20 @@ class ModuleResult:
     additional_modules: list[str] = field(default_factory=list)
 
 
+@dataclass(slots=True)
+class ModuleRunUpdate:
+    """Результат выполнения модуля для фиксации в БД."""
+
+    module_key: str
+    module_name: str
+    status: str
+    started_ts: int
+    finished_ts: int
+    duration_ms: int
+    detail_json: str
+    error_message: Optional[str] = None
+
+
 class AuditModule(Protocol):
     """Протокол для подключаемых модулей аудита."""
 
@@ -86,6 +100,7 @@ class ModuleRunSummary:
     admin_updates: list[AdminPanelUpdate] = field(default_factory=list)
     cms_updates: list[CmsUpdate] = field(default_factory=list)
     executed_modules: list[str] = field(default_factory=list)
+    module_runs: list[ModuleRunUpdate] = field(default_factory=list)
 
     def merge(self, result: ModuleResult, module_key: str) -> None:
         """Добавляет результаты модуля в общий список обновлений."""
@@ -95,3 +110,14 @@ class ModuleRunSummary:
         self.cms_updates.extend(result.cms_updates)
         self.executed_modules.append(module_key)
         logger.debug("Результаты модуля %s добавлены в общий список", module_key)
+
+    def add_module_run(self, module_run: ModuleRunUpdate) -> None:
+        """Добавляет результат выполнения модуля для фиксации в БД."""
+
+        self.module_runs.append(module_run)
+        logger.debug(
+            "Фиксируем запуск модуля %s (status=%s, duration_ms=%s)",
+            module_run.module_key,
+            module_run.status,
+            module_run.duration_ms,
+        )

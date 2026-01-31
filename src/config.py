@@ -98,11 +98,17 @@ def load_config(path: str = "config.yaml") -> AppConfig:
         audit_section.get("concurrency"),
     )
 
+    # Поддерживаем оба ключа для URL шаблона импорта, чтобы не ломать старые конфиги.
+    url_template = import_section.get("url_template") or import_section.get("api_url_template")
+    if not url_template:
+        logger.error("В секции import отсутствует url_template/api_url_template")
+        raise KeyError("config missing import.url_template")
+
     return AppConfig(
         db=DbConfig(url=db_section["url"]),
         rate_limit=RateLimitConfig(rps=float(rate_section["rps"])),
         import_cfg=ImportConfig(
-            url_template=import_section["url_template"],
+            url_template=url_template,
             file_path=import_section["file_path"],
         ),
         audit=AuditConfig(

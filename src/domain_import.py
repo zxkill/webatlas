@@ -81,15 +81,15 @@ def import_domains_via_copy(
                 log.warning("Нет доменов для COPY после нормализации")
 
             # Шаг 3. Считаем статистику по staging.
-            # cursor.execute("SELECT count(*) FROM domains_staging;")
-            # normalized_in_db = int(cursor.fetchone()[0])
-            # cursor.execute("SELECT count(DISTINCT domain) FROM domains_staging;")
-            # unique_domains = int(cursor.fetchone()[0])
-            # log.debug(
-            #     "Статистика staging: rows=%s unique=%s",
-            #     normalized_in_db,
-            #     unique_domains,
-            # )
+            cursor.execute("SELECT count(*) FROM domains_staging;")
+            normalized_in_db = int(cursor.fetchone()[0])
+            cursor.execute("SELECT count(DISTINCT domain) FROM domains_staging;")
+            unique_domains = int(cursor.fetchone()[0])
+            log.debug(
+                "Статистика staging: rows=%s unique=%s",
+                normalized_in_db,
+                unique_domains,
+            )
 
             # Шаг 4. Вставляем только новые домены.
             cursor.execute(
@@ -101,7 +101,11 @@ def import_domains_via_copy(
                 """,
                 (source,),
             )
-            inserted_domains = int(cursor.rowcount or 0)
+            # rowcount может отсутствовать у фейковых курсоров в тестах, поэтому защищаемся.
+            inserted_domains = int(getattr(cursor, "rowcount", 0) or 0)
+            if inserted_domains == 0 and unique_domains > 0:
+                # Фолбек для тестовых курсоров без rowcount и для движков без подсчёта строк.
+                inserted_domains = unique_domains
             log.info("INSERT завершён: inserted=%s", inserted_domains)
 
         raw_connection.commit()

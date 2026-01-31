@@ -50,6 +50,7 @@ class Domain(Base):
     checks = relationship("DomainCheck", back_populates="domain")
     cms_records = relationship("DomainCms", back_populates="domain")
     admin_panels = relationship("AdminPanel", back_populates="domain")
+    module_runs = relationship("ModuleRun", back_populates="domain", order_by="ModuleRun.id")
 
 
 class Check(Base):
@@ -130,6 +131,25 @@ class AdminPanel(Base):
     domain = relationship("Domain", back_populates="admin_panels")
 
 
+class ModuleRun(Base):
+    """Таблица фиксации результатов запуска модулей аудита."""
+
+    __tablename__ = "module_runs"
+
+    id = Column(Integer, primary_key=True)
+    domain_id = Column(Integer, ForeignKey("domains.id"), nullable=False)
+    module_key = Column(String(128), nullable=False)
+    module_name = Column(String(255), nullable=False)
+    status = Column(String(32), nullable=False)
+    started_ts = Column(Integer, nullable=False)
+    finished_ts = Column(Integer, nullable=False)
+    duration_ms = Column(Integer, nullable=False)
+    detail_json = Column(Text, nullable=False)
+    error_message = Column(Text, nullable=True)
+
+    domain = relationship("Domain", back_populates="module_runs")
+
+
 @dataclass(frozen=True)
 class DbState:
     """Упаковываем движок и фабрику сессий, чтобы передавать как единый объект."""
@@ -155,6 +175,20 @@ class AdminPanelRow:
     http_status: Optional[int]
     final_url: Optional[str]
     evidence_json: str
+
+
+@dataclass(frozen=True)
+class ModuleRunRow:
+    """Результат выполнения модуля для записи в БД."""
+
+    module_key: str
+    module_name: str
+    status: str
+    started_ts: int
+    finished_ts: int
+    duration_ms: int
+    detail_json: str
+    error_message: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -375,6 +409,31 @@ def update_domain_cms(session: Session, domain: str, cms_key: str, cms_name: str
     logger.info("Обновлена CMS %s для домена %s", cms_key, domain)
 
 
+def update_module_run(session: Session, domain: str, row: ModuleRunRow) -> None:
+    """Сохраняем запуск модуля в отдельную таблицу module_runs."""
+
+    domain_record = _get_or_create_domain(session, domain)
+    record = ModuleRun(
+        domain_id=domain_record.id,
+        module_key=row.module_key,
+        module_name=row.module_name,
+        status=row.status,
+        started_ts=row.started_ts,
+        finished_ts=row.finished_ts,
+        duration_ms=row.duration_ms,
+        detail_json=row.detail_json,
+        error_message=row.error_message,
+    )
+    session.add(record)
+    session.commit()
+    logger.info(
+        "Зафиксирован запуск модуля %s для домена %s (status=%s)",
+        row.module_key,
+        domain,
+        row.status,
+    )
+
+
 def import_domains_from_file(session: Session, path: str, source: str = "file") -> FileImportStats:
     """Импортируем домены из файла и возвращаем статистику."""
 
@@ -447,6 +506,19 @@ def get_domain_report(session: Session, domain: str) -> Optional[dict]:
         }
         for item in record.admin_panels
     ]
+    module_runs_payload = [
+        {
+            "module_key": item.module_key,
+            "module_name": item.module_name,
+            "status": item.status,
+            "started_ts": item.started_ts,
+            "finished_ts": item.finished_ts,
+            "duration_ms": item.duration_ms,
+            "detail_json": item.detail_json,
+            "error_message": item.error_message,
+        }
+        for item in record.module_runs
+    ]
 
     report = {
         "domain": record.domain,
@@ -456,7 +528,7 @@ def get_domain_report(session: Session, domain: str) -> Optional[dict]:
         "checks": checks_payload,
         "cms": cms_payload,
         "admin_panels": admin_payload,
+        "module_runs": module_runs_payload,
     }
     logger.info("Сформирован отчёт по домену: %s", normalized)
     return report
-

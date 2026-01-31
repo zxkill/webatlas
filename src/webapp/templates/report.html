@@ -20,6 +20,7 @@
   {% set checks = report.checks or report.get('checks') or [] %}
   {% set cms = report.cms or report.get('cms') or [] %}
   {% set admin_panels = report.admin_panels or report.get('admin_panels') or [] %}
+  {% set module_runs = report.module_runs or report.get('module_runs') or [] %}
 
   <div class="card" style="margin-top:14px;">
     <div class="card-header">
@@ -40,6 +41,42 @@
   </div>
 
   <div class="grid" style="margin-top:16px; grid-template-columns: 1fr;">
+    <div class="card">
+      <div class="card-header">
+        <div>
+          <p class="card-title">Модули</p>
+          <p class="card-subtitle">История запусков и статусы выполнения.</p>
+        </div>
+        <span class="pill"><span class="dot"></span>{{ module_runs|length }} шт.</span>
+      </div>
+      <div class="card-body">
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Модуль</th><th>Ключ</th><th>Статус</th><th>Длительность</th><th>Ошибка</th></tr></thead>
+            <tbody>
+              {% if module_runs %}
+                {% for run in module_runs %}
+                  <tr>
+                    <td>{{ run.module_name if run.module_name is defined else run.get('module_name','') }}</td>
+                    <td class="mono">{{ run.module_key if run.module_key is defined else run.get('module_key','') }}</td>
+                    <td>{{ status_pill(run.status if run.status is defined else run.get('status')) }}</td>
+                    <td class="mono">
+                      {{ run.duration_ms if run.duration_ms is defined else run.get('duration_ms','') }} ms
+                    </td>
+                    <td class="mono">
+                      {{ run.error_message if run.error_message is defined else run.get('error_message','') }}
+                    </td>
+                  </tr>
+                {% endfor %}
+              {% else %}
+                <tr><td colspan="5">Данных пока нет</td></tr>
+              {% endif %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
     <div class="card">
       <div class="card-header">
         <div>

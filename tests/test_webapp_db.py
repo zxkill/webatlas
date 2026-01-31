@@ -14,6 +14,8 @@ from src.webapp_db import (
     Domain,
     DomainCheck,
     DomainCms,
+    ModuleRun,
+    ModuleRunRow,
     create_db_state,
     create_domain,
     domains_staging_table,
@@ -24,6 +26,7 @@ from src.webapp_db import (
     update_admin_panel,
     update_check,
     update_domain_cms,
+    update_module_run,
 )
 
 
@@ -42,6 +45,7 @@ def _cleanup(session) -> None:
     session.query(DomainCheck).delete()
     session.query(DomainCms).delete()
     session.query(AdminPanel).delete()
+    session.query(ModuleRun).delete()
     session.query(Check).delete()
     session.query(Cms).delete()
     session.query(Domain).delete()
@@ -69,6 +73,19 @@ def test_webapp_db_create_and_report():
             "1C-Bitrix",
             CmsRow(status="yes", confidence=90, evidence_json="{}"),
         )
+        update_module_run(
+            session,
+            "example.com",
+            ModuleRunRow(
+                module_key="availability",
+                module_name="Availability",
+                status="success",
+                started_ts=1,
+                finished_ts=2,
+                duration_ms=100,
+                detail_json='{"check_updates": 1}',
+            ),
+        )
         report = get_domain_report(session, "example.com")
 
     assert report is not None
@@ -76,6 +93,7 @@ def test_webapp_db_create_and_report():
     assert report["checks"][0]["status"] == "yes"
     assert report["admin_panels"][0]["status"] == "yes"
     assert report["cms"][0]["key"] == "bitrix"
+    assert report["module_runs"][0]["module_key"] == "availability"
 
 
 # Проверяем импорт доменов из файла.
