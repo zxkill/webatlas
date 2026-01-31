@@ -5,79 +5,60 @@
 <a class="back" href="/">← Назад</a>
 
 {% if not report %}
-  <div class="card" style="margin-top:14px;">
+<div class="card" style="margin-top:14px;">
     <div class="card-header">
-      <div>
-        <p class="card-title">Отчёт не найден</p>
-        <p class="card-subtitle">Домен отсутствует в базе данных.</p>
-      </div>
+        <div>
+            <p class="card-title">Отчёт не найден</p>
+            <p class="card-subtitle">Домен отсутствует в базе данных.</p>
+        </div>
     </div>
     <div class="card-body">
-      <p class="hint">Домен: <span class="mono">{{ domain }}</span></p>
+        <p class="hint">Домен: <span class="mono">{{ domain }}</span></p>
     </div>
-  </div>
+</div>
 {% else %}
-  {% set module_blocks = report.module_blocks or report.get('module_blocks') or [] %}
+{% set module_blocks = report.module_blocks or report.get('module_blocks') or [] %}
 
-  <div class="card" style="margin-top:14px;">
+<div class="card" style="margin-top:14px;">
     <div class="card-header">
-      <div>
-        <p class="card-title">Отчёт по домену</p>
-        <p class="card-subtitle"><span class="mono">{{ report.domain or report.get('domain', domain) }}</span></p>
-      </div>
-      <span class="pill"><span class="dot"></span>Report</span>
+        <div>
+            <p class="card-title">Отчёт по домену</p>
+            <p class="card-subtitle"><span class="mono">{{ report.domain or report.get('domain', domain) }}</span></p>
+        </div>
+        <span class="pill"><span class="dot"></span>Report</span>
     </div>
 
     <div class="card-body stack">
-      <div class="kvs">
-        <div class="k">Источник</div><div class="v">{{ report.source or report.get('source','-') }}</div>
-        <div class="k">Создан</div><div class="v">{{ report.created_at or report.get('created_at','-') }}</div>
-        <div class="k">Обновлён</div><div class="v">{{ report.updated_at or report.get('updated_at','-') }}</div>
-      </div>
+        <div class="kvs">
+            <div class="k">Источник</div>
+            <div class="v">{{ report.source or report.get('source','-') }}</div>
+            <div class="k">Создан</div>
+            <div class="v">{{ report.created_at or report.get('created_at','-') }}</div>
+            <div class="k">Обновлён</div>
+            <div class="v">{{ report.updated_at or report.get('updated_at','-') }}</div>
+        </div>
     </div>
-  </div>
+</div>
 
-  <div class="grid" style="margin-top:16px; grid-template-columns: 1fr;">
+<div class="grid" style="margin-top:16px; grid-template-columns: 1fr;">
     {% if module_blocks %}
-      {% for block in module_blocks %}
+    {% for block in module_blocks %}
         <div class="card">
-          <div class="card-header">
-            <div>
-              <p class="card-title">{{ block.name if block.name is defined else block.get('name','') }}</p>
-              <p class="card-subtitle">{{ block.description if block.description is defined else block.get('description','') }}</p>
-            </div>
-            <span class="pill"><span class="dot"></span>{{ (block.entries if block.entries is defined else block.get('entries',[])) | length }} шт.</span>
-          </div>
-          <div class="card-body">
-            <div class="table-wrap">
-              <table>
-                <thead><tr><th>Время</th><th>Статус</th><th>Результат</th></tr></thead>
-                <tbody>
-                  {% set entries = block.entries if block.entries is defined else block.get('entries', []) %}
-                  {% if entries %}
-                    {% for entry in entries %}
-                      <tr>
-                        <td class="mono">{{ entry.timestamp if entry.timestamp is defined else entry.get('timestamp','') }}</td>
-                        <td>{{ status_pill(entry.status if entry.status is defined else entry.get('status')) }}</td>
-                        <td>{{ entry.message if entry.message is defined else entry.get('message','') }}</td>
-                      </tr>
-                    {% endfor %}
-                  {% else %}
-                    <tr><td colspan="3">{{ block.empty_message if block.empty_message is defined else block.get('empty_message','Данных пока нет') }}</td></tr>
-                  {% endif %}
-                </tbody>
-              </table>
-            </div>
-          </div>
+            {% set tpl = block.template %}
+            {% if tpl and (tpl.startswith('/') or tpl.startswith('audit_modules/')) %}
+              {% include tpl %}
+            {% else %}
+              {% include "_generic_block.html" %}
+            {% endif %}
         </div>
-      {% endfor %}
+    {% endfor %}
     {% else %}
-      <div class="card">
+    <div class="card">
         <div class="card-body">
-          <p class="hint">Данных по модулям пока нет.</p>
+            <p class="hint">Данных по модулям пока нет.</p>
         </div>
-      </div>
+    </div>
     {% endif %}
-  </div>
+</div>
 {% endif %}
 {% endblock %}

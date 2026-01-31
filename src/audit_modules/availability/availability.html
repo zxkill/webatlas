@@ -1,0 +1,113 @@
+{# src/audit_modules/availability/availability.html #}
+{% from "partials/_status.html" import status_pill %}
+
+{% set headline = block.headline %}
+{% set kpis = block.kpis or {} %}
+{% set insights = block.insights or [] %}
+{% set timeline = block.timeline or [] %}
+
+<div class="card-header">
+  <div>
+    <p class="card-title">{{ block.name }}</p>
+    <p class="card-subtitle">{{ block.description }}</p>
+  </div>
+
+  {% if kpis.uptime_24h_pct is not none %}
+    {% set st = 'ok' if kpis.uptime_24h_pct >= 99.99 else 'warning' if kpis.uptime_24h_pct >= 90 else 'critical' %}
+    {{ status_pill(st) }}
+  {% endif %}
+</div>
+
+<div class="card-body stack">
+
+  {# === HEADLINE === #}
+  {% if headline %}
+    <div class="card" style="margin:0; background:color-mix(in oklab, var(--surface), var(--surface-2) 25%);">
+      <div class="card-body" style="padding:14px;">
+        <p style="margin:0; font-size:16px; font-weight:700;">
+          {{ headline }}
+        </p>
+        <p class="hint" style="margin-top:6px;">
+          Оценка основана на устойчивости ответов, кодах HTTP и времени ответа.
+        </p>
+      </div>
+    </div>
+  {% endif %}
+
+  {# === KPIs === #}
+  <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(160px,1fr)); gap:10px;">
+    {% if kpis.uptime_24h_pct is not none %}
+      <div class="card">
+        <div class="card-body">
+          <p class="hint">Аптайм (24ч)</p>
+          <p style="font-size:18px; font-weight:700;">{{ kpis.uptime_24h_pct }}%</p>
+        </div>
+      </div>
+    {% endif %}
+    {% if kpis.uptime_7d_pct is not none %}
+      <div class="card">
+        <div class="card-body">
+          <p class="hint">Аптайм (7д)</p>
+          <p style="font-size:18px; font-weight:700;">{{ kpis.uptime_7d_pct }}%</p>
+        </div>
+      </div>
+    {% endif %}
+    {% if kpis.median_ttfb_ms is not none %}
+      <div class="card">
+        <div class="card-body">
+          <p class="hint">TTFB (медиана)</p>
+          <p style="font-size:18px; font-weight:700;">{{ kpis.median_ttfb_ms }} ms</p>
+        </div>
+      </div>
+    {% endif %}
+    {% if kpis.median_elapsed_ms is not none %}
+      <div class="card">
+        <div class="card-body">
+          <p class="hint">Ответ (медиана)</p>
+          <p style="font-size:18px; font-weight:700;">{{ kpis.median_elapsed_ms }} ms</p>
+        </div>
+      </div>
+    {% endif %}
+  </div>
+
+  {# === INSIGHTS === #}
+  {% if insights %}
+    <div class="card" style="margin:0;">
+      <div class="card-body">
+        <p class="hint" style="margin-bottom:6px;">Выводы</p>
+        <ul style="margin:0; padding-left:18px;">
+          {% for i in insights %}
+            <li style="margin:4px 0;">{{ i }}</li>
+          {% endfor %}
+        </ul>
+      </div>
+    </div>
+  {% endif %}
+
+  {# === TIMELINE === #}
+  {% if timeline %}
+    <div class="card" style="margin:0;">
+      <div class="card-header">
+        <p class="card-title">Последние проверки</p>
+      </div>
+      <div class="card-body">
+        <div class="stack">
+          {% for t in timeline %}
+            <div style="display:flex; gap:10px; align-items:flex-start;">
+              <span class="mono">{{ t.timestamp }}</span>
+              <div>
+                <div>{{ t.title }}</div>
+                {% if t.meta %}
+                  <div class="hint">
+                    {{ t.meta.scheme }}{{ t.meta.path }} · попытка {{ t.meta.attempt_no }}
+                  </div>
+                {% endif %}
+              </div>
+            </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  {% endif %}
+
+</div>

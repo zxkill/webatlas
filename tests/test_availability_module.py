@@ -3,7 +3,7 @@ import json
 from types import SimpleNamespace
 from urllib.parse import urlparse
 
-from src.audit_modules.availability import AvailabilityModule
+from src.audit_modules.availability.availability import AvailabilityModule
 from src.audit_modules.types import AuditContext
 from src.config import AppConfig, AuditConfig, AuditTimeouts, DbConfig, ImportConfig, RateLimitConfig
 from src.http import HttpResponse

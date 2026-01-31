@@ -1,0 +1,129 @@
+{# templates/modules/tls_certificate.html #}
+{% from "partials/_status.html" import status_pill %}
+
+{% set summary = block.summary if block.summary is defined else block.get('summary') %}
+{% set sections = block.sections if block.sections is defined else block.get('sections', []) %}
+{% set notes = block.secondary_notes if block.secondary_notes is defined else block.get('secondary_notes', []) %}
+{% set entries = block.entries if block.entries is defined else block.get('entries', []) %}
+
+<div class="card-header">
+  <div>
+    <p class="card-title">{{ block.name if block.name is defined else block.get('name','TLS') }}</p>
+    <p class="card-subtitle">{{ block.description if block.description is defined else block.get('description','') }}</p>
+  </div>
+
+  {% if summary %}
+    <div style="display:flex; align-items:center; gap:10px;">
+      {{ status_pill(summary.status if summary.status is defined else summary.get('status')) }}
+      <span class="pill"><span class="dot"></span>{{ (summary.score if summary.score is defined else summary.get('score')) ~ '/100' }}</span>
+    </div>
+  {% else %}
+    <span class="pill"><span class="dot"></span>{{ entries|length }} шт.</span>
+  {% endif %}
+</div>
+
+<div class="card-body stack">
+
+  {# Summary headline #}
+  {% if summary %}
+    <div class="card" style="margin:0; background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06);">
+      <div class="card-body" style="padding:14px;">
+        <p style="margin:0; font-weight:800; font-size:16px;">
+          {{ summary.short if summary.short is defined else summary.get('short','') }}
+        </p>
+        <p class="hint" style="margin:6px 0 0 0;">
+          Оценка риска рассчитана по сроку действия, версиям TLS, шифрам и HSTS.
+        </p>
+      </div>
+    </div>
+  {% endif %}
+
+  {# Sections (checks) #}
+  {% if sections %}
+    <div class="grid" style="grid-template-columns: 1fr; gap:10px;">
+      {% for s in sections %}
+        <div class="card" style="margin:0;">
+          <div class="card-header" style="padding:12px 14px;">
+            <p style="margin:0; font-weight:700;">{{ s.title if s.title is defined else s.get('title','') }}</p>
+          </div>
+          <div class="card-body" style="padding:12px 14px;">
+            {% set checks = s.checks if s.checks is defined else s.get('checks', []) %}
+            <div class="stack" style="gap:10px;">
+              {% for c in checks %}
+                <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:12px;">
+                  <div>
+                    <div style="display:flex; align-items:center; gap:10px;">
+                      <p style="margin:0; font-weight:700;">{{ c.label if c.label is defined else c.get('label','') }}</p>
+                      {{ status_pill(c.status if c.status is defined else c.get('status')) }}
+                    </div>
+                    {% set msg = c.message if c.message is defined else c.get('message') %}
+                    {% if msg %}
+                      <p class="hint" style="margin:6px 0 0 0;">{{ msg }}</p>
+                    {% endif %}
+                  </div>
+                </div>
+              {% endfor %}
+            </div>
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+  {% endif %}
+
+  {# Secondary notes (diagnostics) #}
+  {% if notes %}
+    <div class="card" style="margin:0; background: rgba(255,255,255,0.02); border: 1px dashed rgba(255,255,255,0.14);">
+      <div class="card-body" style="padding:12px 14px;">
+        <p class="hint" style="margin:0 0 8px 0;">Диагностика</p>
+        <ul style="margin:0; padding-left:18px;">
+          {% for n in notes %}
+            <li style="margin:4px 0;">
+              {{ n.message if n.message is defined else n.get('message','') }}
+            </li>
+          {% endfor %}
+        </ul>
+      </div>
+    </div>
+  {% endif %}
+
+  {# History table #}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Время</th>
+          <th>Статус</th>
+          <th>Результат</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% if entries %}
+          {% for e in entries %}
+            <tr>
+              <td class="mono">{{ e.timestamp if e.timestamp is defined else e.get('timestamp','') }}</td>
+              <td>{{ status_pill(e.status if e.status is defined else e.get('status')) }}</td>
+              <td>
+                <div style="display:flex; flex-direction:column; gap:4px;">
+                  <span>{{ e.message if e.message is defined else e.get('message','') }}</span>
+                  {% set d = e.details if e.details is defined else e.get('details') %}
+                  {% if d %}
+                    <span class="hint">
+                      TLS: {{ d.tls_version if d.tls_version is defined else d.get('tls_version','-') }}
+                      · Cipher: {{ d.cipher if d.cipher is defined else d.get('cipher','-') }}
+                      · Days left: {{ d.days_left if d.days_left is defined else d.get('days_left','-') }}
+                    </span>
+                  {% endif %}
+                </div>
+              </td>
+            </tr>
+          {% endfor %}
+        {% else %}
+          <tr>
+            <td colspan="3">{{ block.empty_message if block.empty_message is defined else block.get('empty_message','Данных пока нет') }}</td>
+          </tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+
+</div>

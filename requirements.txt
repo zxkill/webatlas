@@ -12,3 +12,4 @@ redis
 python-multipart
 watchfiles
 jinja2
+Brotli

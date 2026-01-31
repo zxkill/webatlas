@@ -8,10 +8,10 @@ pytest.importorskip("sqlalchemy")
 
 from src.db import AdminPanelRow, CheckRow, Database
 from src.webapp_db import AdminPanel, Check, Cms, Domain, DomainCheck, DomainCms, ModuleRun, ModuleRunRow
-from src.audit_modules.availability import AvailabilityCheck
-from src.audit_modules.bitrix_admin import BitrixAdminCheck
-from src.audit_modules.bitrix_detect import BitrixDetectCheck
-from src.audit_modules.tls_certificate import TlsCertificateCheck
+from src.audit_modules.availability.availability import AvailabilityCheck
+from src.audit_modules.admin_detect.admin_detect import BitrixAdminCheck
+from src.audit_modules.cms_detect.bitrix_detect import BitrixDetectCheck
+from src.audit_modules.tls_certificate.tls_certificate import TlsCertificateCheck
 
 
 # Проверяем основные операции БД на PostgreSQL. Тест пропускается без DSN.

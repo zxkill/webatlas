@@ -1,0 +1,40 @@
+{% from "partials/_status.html" import status_pill %}
+
+<div class="card-header">
+    <div>
+        <p class="card-title">{{ block.name }}</p>
+        <p class="card-subtitle">{{ block.description }}</p>
+    </div>
+
+    {% set cnt = (block.entries | length) %}
+    <span class="pill"><span class="dot"></span>{{ cnt }} шт.</span>
+</div>
+
+<div class="card-body stack">
+    <div class="table-wrap">
+        <table>
+            <thead>
+            <tr>
+                <th>Время</th>
+                <th>Статус</th>
+                <th>Результат</th>
+            </tr>
+            </thead>
+            <tbody>
+            {% if block.entries %}
+            {% for e in block.entries %}
+            <tr>
+                <td class="mono">{{ e.timestamp }}</td>
+                <td>{{ status_pill(e.status) }}</td>
+                <td>{{ e.message }}</td>
+            </tr>
+            {% endfor %}
+            {% else %}
+            <tr>
+                <td colspan="3">{{ block.empty_message }}</td>
+            </tr>
+            {% endif %}
+            </tbody>
+        </table>
+    </div>
+</div>
