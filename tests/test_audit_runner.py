@@ -64,6 +64,9 @@ def test_run_modules_for_domain_adds_dynamic_modules(monkeypatch) -> None:
     summary = asyncio.run(run_modules_for_domain(context, selected_modules=None))
 
     assert summary.executed_modules == ["base", "extra"]
+    assert [item.module_key for item in summary.module_runs] == ["base", "extra"]
+    assert all(item.status == "success" for item in summary.module_runs)
+    assert [item.module_key for item in summary.module_outputs] == ["base", "extra"]
 
 
 class _AvailabilityStopModule:
@@ -89,6 +92,27 @@ class _SkippedModule:
         return ModuleResult()
 
 
+class _FailingModule:
+    key = "broken"
+    name = "Broken"
+    description = "broken"
+    depends_on = ()
+
+    async def run(self, context: AuditContext) -> ModuleResult:
+        # Имитируем ошибку внутри модуля, чтобы runner сохранил статус.
+        raise RuntimeError("fail")
+
+
+class _AfterFailModule:
+    key = "after"
+    name = "After"
+    description = "after"
+    depends_on = ()
+
+    async def run(self, context: AuditContext) -> ModuleResult:
+        return ModuleResult()
+
+
 def test_run_modules_for_domain_stops_after_unreachable(monkeypatch) -> None:
     # Подменяем реестр и план, чтобы проверить остановку после модуля доступности.
     import src.audit_modules.runner as runner
@@ -107,3 +131,28 @@ def test_run_modules_for_domain_stops_after_unreachable(monkeypatch) -> None:
     summary = asyncio.run(run_modules_for_domain(context, selected_modules=None))
 
     assert summary.executed_modules == ["availability"]
+    assert [item.module_key for item in summary.module_runs] == ["availability"]
+    assert [item.module_key for item in summary.module_outputs] == ["availability"]
+
+
+def test_run_modules_for_domain_records_failures(monkeypatch) -> None:
+    # Проверяем, что ошибка модуля фиксируется в отчёте и аудит продолжается.
+    import src.audit_modules.runner as runner
+
+    registry = {"broken": _FailingModule(), "after": _AfterFailModule()}
+    monkeypatch.setattr(runner, "get_registry", lambda: registry)
+    monkeypatch.setattr(runner, "resolve_module_plan", lambda selected: ["broken", "after"])
+
+    context = AuditContext(
+        domain="example.com",
+        session=SimpleNamespace(),
+        http=HttpClient(rps=1, total_timeout_s=1),
+        config=_make_config(),
+    )
+
+    summary = asyncio.run(run_modules_for_domain(context, selected_modules=None))
+
+    assert summary.executed_modules == ["broken", "after"]
+    assert [item.module_key for item in summary.module_runs] == ["broken", "after"]
+    assert summary.module_runs[0].status == "error"
+    assert [item.module_key for item in summary.module_outputs] == ["broken", "after"]

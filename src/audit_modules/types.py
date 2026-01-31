@@ -4,6 +4,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional, Protocol
 
+from sqlalchemy.orm import Session
+
 from src.config import AppConfig
 from src.http import HttpClient
 from src.webapp_db import AdminPanelRow, CheckRow, CmsRow
@@ -64,6 +66,21 @@ class ModuleResult:
     admin_updates: list[AdminPanelUpdate] = field(default_factory=list)
     cms_updates: list[CmsUpdate] = field(default_factory=list)
     additional_modules: list[str] = field(default_factory=list)
+    module_payload: list[dict[str, Any]] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class ModuleRunUpdate:
+    """Результат выполнения модуля для фиксации в БД."""
+
+    module_key: str
+    module_name: str
+    status: str
+    started_ts: int
+    finished_ts: int
+    duration_ms: int
+    detail_json: str
+    error_message: Optional[str] = None
 
 
 class AuditModule(Protocol):
@@ -77,6 +94,21 @@ class AuditModule(Protocol):
     async def run(self, context: AuditContext) -> ModuleResult:
         """Запускает модуль и возвращает результат аудита."""
 
+    def persist(self, session: Session, domain: str, payload: list[dict[str, Any]]) -> None:
+        """Сохраняет модульные результаты в БД."""
+
+    def build_report_block(self, session: Session, domain: str) -> dict[str, Any]:
+        """Строит блок отчёта по модулю из данных БД."""
+
+
+@dataclass(slots=True)
+class ModuleOutput:
+    """Результат выполнения модуля для дальнейшего сохранения и отчёта."""
+
+    module_key: str
+    module_name: str
+    payload: list[dict[str, Any]]
+
 
 @dataclass(slots=True)
 class ModuleRunSummary:
@@ -86,6 +118,8 @@ class ModuleRunSummary:
     admin_updates: list[AdminPanelUpdate] = field(default_factory=list)
     cms_updates: list[CmsUpdate] = field(default_factory=list)
     executed_modules: list[str] = field(default_factory=list)
+    module_runs: list[ModuleRunUpdate] = field(default_factory=list)
+    module_outputs: list[ModuleOutput] = field(default_factory=list)
 
     def merge(self, result: ModuleResult, module_key: str) -> None:
         """Добавляет результаты модуля в общий список обновлений."""
@@ -95,3 +129,24 @@ class ModuleRunSummary:
         self.cms_updates.extend(result.cms_updates)
         self.executed_modules.append(module_key)
         logger.debug("Результаты модуля %s добавлены в общий список", module_key)
+
+    def add_module_run(self, module_run: ModuleRunUpdate) -> None:
+        """Добавляет результат выполнения модуля для фиксации в БД."""
+
+        self.module_runs.append(module_run)
+        logger.debug(
+            "Фиксируем запуск модуля %s (status=%s, duration_ms=%s)",
+            module_run.module_key,
+            module_run.status,
+            module_run.duration_ms,
+        )
+
+    def add_module_output(self, module_output: ModuleOutput) -> None:
+        """Добавляет модульный результат для дальнейшей записи в БД."""
+
+        self.module_outputs.append(module_output)
+        logger.debug(
+            "Добавлен модульный результат %s (payload=%s)",
+            module_output.module_key,
+            len(module_output.payload),
+        )

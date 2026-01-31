@@ -1,11 +1,19 @@
 from __future__ import annotations
 
+import json
 import logging
+import time
 from collections import deque
 from collections.abc import Iterable
 
 from src.audit_modules.registry import get_registry, resolve_module_plan
-from src.audit_modules.types import AuditContext, ModuleResult, ModuleRunSummary
+from src.audit_modules.types import (
+    AuditContext,
+    ModuleOutput,
+    ModuleResult,
+    ModuleRunSummary,
+    ModuleRunUpdate,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +54,51 @@ async def run_modules_for_domain(
             continue
 
         logger.info("Запуск модуля %s для домена %s", module_key, context.domain)
-        result = await module.run(context)
+        started_ts = int(time.time())
+        started_ms = time.monotonic()
+        error_message = None
+        result = ModuleResult()
+        try:
+            # Запускаем модуль и ловим ошибки, чтобы сохранить статус выполнения в БД.
+            result = await module.run(context)
+        except Exception as exc:  # pylint: disable=broad-except
+            error_message = str(exc)
+            logger.exception(
+                "Ошибка выполнения модуля %s для домена %s",
+                module_key,
+                context.domain,
+            )
+        finished_ts = int(time.time())
+        duration_ms = int((time.monotonic() - started_ms) * 1000)
+
+        detail_payload = {
+            "check_updates": len(result.check_updates),
+            "admin_updates": len(result.admin_updates),
+            "cms_updates": len(result.cms_updates),
+            "additional_modules": list(result.additional_modules),
+        }
+        if error_message:
+            detail_payload["error"] = error_message
+        summary.add_module_run(
+            ModuleRunUpdate(
+                module_key=module_key,
+                module_name=module.name,
+                status="error" if error_message else "success",
+                started_ts=started_ts,
+                finished_ts=finished_ts,
+                duration_ms=duration_ms,
+                detail_json=json.dumps(detail_payload, ensure_ascii=False),
+                error_message=error_message,
+            )
+        )
+        summary.add_module_output(
+            ModuleOutput(
+                module_key=module_key,
+                module_name=module.name,
+                payload=list(result.module_payload),
+            )
+        )
+
         summary.merge(result, module_key)
         executed.add(module_key)
 

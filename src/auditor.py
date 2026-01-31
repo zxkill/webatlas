@@ -10,7 +10,9 @@ from src.audit_modules.runner import run_modules_for_domain
 from src.audit_modules.types import AuditContext, ModuleRunSummary
 from src.config import AppConfig
 from src.db import Database
+from src.webapp_db import ModuleRunRow
 from src.http import HttpClient
+from src.audit_modules.registry import get_registry
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +75,30 @@ class Auditor:
 def _persist_summary(db: Database, domain: str, summary: ModuleRunSummary) -> None:
     """Сохраняет результаты модулей в базу данных через Database."""
 
+    registry = get_registry()
+    # Сохраняем модульные результаты через методы самих модулей.
+    for module_output in summary.module_outputs:
+        module = registry.get(module_output.module_key)
+        if module is None:
+            logger.warning("Модуль %s отсутствует в реестре при сохранении", module_output.module_key)
+            continue
+        module.persist(db._session, domain, module_output.payload)
+
+    # Сохраняем результат запуска каждого модуля отдельной записью.
+    for module_run in summary.module_runs:
+        db.update_module_run(
+            domain,
+            ModuleRunRow(
+                module_key=module_run.module_key,
+                module_name=module_run.module_name,
+                status=module_run.status,
+                started_ts=module_run.started_ts,
+                finished_ts=module_run.finished_ts,
+                duration_ms=module_run.duration_ms,
+                detail_json=module_run.detail_json,
+                error_message=module_run.error_message,
+            ),
+        )
     for update in summary.check_updates:
         db.update_check(domain, update.key, update.row, description=update.description)
     for update in summary.admin_updates:

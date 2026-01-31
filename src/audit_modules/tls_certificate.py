@@ -5,10 +5,14 @@ import json
 import logging
 import socket
 import ssl
+import time
 from datetime import datetime
 
+from sqlalchemy import Column, ForeignKey, Integer, String, Text
+from sqlalchemy.orm import Session
+
 from src.audit_modules.types import AuditContext, CheckUpdate, ModuleResult
-from src.webapp_db import CheckRow
+from src.webapp_db import Base, CheckRow, Domain, create_domain
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +44,7 @@ class TlsCertificateModule:
             return cert
 
         evidence: dict = {"domain": context.domain}
+        module_payload: list[dict] = []
         try:
             cert = await asyncio.to_thread(_fetch_certificate)
             evidence["certificate"] = _normalize_cert(cert)
@@ -49,6 +54,15 @@ class TlsCertificateModule:
                 score=100,
                 evidence_json=json.dumps(evidence, ensure_ascii=False),
             )
+            module_payload.append(
+                {
+                    "checked_ts": int(time.time()),
+                    "status": "yes",
+                    "not_after": evidence["certificate"].get("notAfter"),
+                    "issuer": json.dumps(evidence["certificate"].get("issuer"), ensure_ascii=False),
+                    "evidence_json": json.dumps(evidence, ensure_ascii=False),
+                }
+            )
         except (ssl.SSLError, socket.error, TimeoutError) as exc:
             logger.warning("[tls] ошибка получения сертификата для %s: %s", context.domain, exc)
             evidence["error"] = str(exc)
@@ -56,6 +70,15 @@ class TlsCertificateModule:
                 status="no",
                 score=0,
                 evidence_json=json.dumps(evidence, ensure_ascii=False),
+            )
+            module_payload.append(
+                {
+                    "checked_ts": int(time.time()),
+                    "status": "no",
+                    "not_after": None,
+                    "issuer": None,
+                    "evidence_json": json.dumps(evidence, ensure_ascii=False),
+                }
             )
 
         return ModuleResult(
@@ -65,8 +88,91 @@ class TlsCertificateModule:
                     description="Проверка TLS сертификата",
                     row=row,
                 )
-            ]
+            ],
+            module_payload=module_payload,
         )
+
+    def persist(self, session: Session, domain: str, payload: list[dict]) -> None:
+        """
+        Сохраняет результаты TLS проверки в таблицу tls_certificate_checks.
+        """
+
+        if not payload:
+            logger.debug("[tls] нет данных для сохранения по домену %s", domain)
+            return
+
+        domain_record = session.query(Domain).filter(Domain.domain == domain).one_or_none()
+        if domain_record is None:
+            logger.info("[tls] домен %s отсутствовал, создаём запись перед сохранением", domain)
+            domain_record = create_domain(session, domain, source="audit")
+
+        for item in payload:
+            session.add(
+                TlsCertificateCheck(
+                    domain_id=domain_record.id,
+                    checked_ts=item.get("checked_ts", int(time.time())),
+                    status=item.get("status", "no"),
+                    not_after=item.get("not_after"),
+                    issuer=item.get("issuer"),
+                    evidence_json=item.get("evidence_json"),
+                )
+        )
+        session.commit()
+        logger.info("[tls] сохранены проверки TLS: domain=%s count=%s", domain, len(payload))
+
+    def build_report_block(self, session: Session, domain: str) -> dict:
+        """
+        Формирует блок отчёта по TLS, показывая последние 5 проверок.
+        """
+
+        domain_record = session.query(Domain).filter(Domain.domain == domain).one_or_none()
+        if domain_record is None:
+            return {
+                "key": self.key,
+                "name": self.name,
+                "description": self.description,
+                "entries": [],
+                "empty_message": "Данные о домене отсутствуют в базе.",
+            }
+
+        rows = (
+            session.query(TlsCertificateCheck)
+            .filter(TlsCertificateCheck.domain_id == domain_record.id)
+            .order_by(TlsCertificateCheck.checked_ts.desc())
+            .limit(5)
+            .all()
+        )
+
+        entries = []
+        for row in rows:
+            timestamp = datetime.fromtimestamp(row.checked_ts).strftime("%d.%m.%Y %H:%M:%S")
+            if row.status == "yes":
+                message = f"сертификат получен, срок до {row.not_after or 'не указан'}"
+            else:
+                message = "сертификат не получен"
+            entries.append({"timestamp": timestamp, "status": row.status, "message": message, "details": {}})
+
+        return {
+            "key": self.key,
+            "name": self.name,
+            "description": self.description,
+            "entries": entries,
+            "empty_message": "Проверки TLS ещё не выполнялись.",
+        }
+
+
+class TlsCertificateCheck(Base):
+    """Таблица результатов проверки TLS сертификата."""
+
+    __tablename__ = "tls_certificate_checks"
+
+    id = Column(Integer, primary_key=True)
+    domain_id = Column(Integer, ForeignKey("domains.id"), nullable=False)
+    checked_ts = Column(Integer, nullable=False)
+    status = Column(String(32), nullable=False)
+    not_after = Column(String(128), nullable=True)
+    issuer = Column(Text, nullable=True)
+    evidence_json = Column(Text, nullable=True)
 
 
 def _normalize_cert(cert: dict) -> dict:
