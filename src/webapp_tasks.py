@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Iterable, Optional
 
 from src.domain_import import import_domains_via_copy
-from src.webapp_import_zip import download_zip, extract_txt_from_zip
+from src.utils.zip_import import download_zip, extract_txt_from_zip
 from celery.schedules import crontab
 from src.settings import load_settings, configure_logging
 
@@ -257,7 +257,7 @@ def import_domains_from_zip_task() -> dict[str, int]:
     logger.info("Ночной импорт доменов из ZIP: %s", url)
 
     zip_path = download_zip(url)
-    txt_path = extract_txt_from_zip(zip_path)
+    txt_path = extract_txt_from_zip(zip_path, preferred_name="ru.txt")
 
     try:
         # Используем сырое DB-API соединение, чтобы выполнить COPY максимально быстро.
