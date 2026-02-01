@@ -20,12 +20,11 @@ from sqlalchemy import (
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, declarative_base, relationship, sessionmaker
 
-from src.domain_import import import_domains_via_copy
+from src.utils.domain_import import import_domains_via_copy
 
 logger = logging.getLogger(__name__)
 
 Base = declarative_base()
-
 
 # Временная staging-таблица для быстрого COPY-импорта доменов.
 # Важно: без первичного ключа и индексов, чтобы загрузка была максимально быстрой.
@@ -237,7 +236,7 @@ def init_db(state: DbState) -> None:
     Base.metadata.create_all(state.engine)
 
 
-def create_domain(session: Session, domain: str, source: str = "manual") -> Domain:
+def create_domain(session: Session, domain: str, source: str = "manual", *, commit: bool = True) -> Domain:
     """
     Добавляет домен в базу, если он отсутствует, иначе обновляет источник.
 
@@ -251,7 +250,8 @@ def create_domain(session: Session, domain: str, source: str = "manual") -> Doma
         logger.info("Домен уже существует в базе: %s", normalized)
         existing.source = source
         existing.updated_at = func.now()
-        session.commit()
+        if commit:
+            session.commit()
         return existing
 
     record = Domain(domain=normalized, source=source)
@@ -259,6 +259,8 @@ def create_domain(session: Session, domain: str, source: str = "manual") -> Doma
     session.flush()
     session.refresh(record)
     logger.info("Создан новый домен: %s", normalized)
+    if commit:
+        session.commit()
     return record
 
 
@@ -269,50 +271,61 @@ def list_domains(session: Session, limit: int = 100) -> Iterable[Domain]:
     return session.query(Domain).order_by(Domain.id.desc()).limit(limit).all()
 
 
-def _get_or_create_domain(session: Session, domain: str) -> Domain:
+def _get_or_create_domain(session: Session, domain: str, *, commit: bool = True) -> Domain:
     """Внутренний помощник: гарантирует наличие домена в базе."""
 
     normalized = domain.strip().lower()
     record = session.query(Domain).filter(Domain.domain == normalized).one_or_none()
     if record:
         return record
+
     logger.info("Домен отсутствовал в базе и будет создан: %s", normalized)
     record = Domain(domain=normalized, source="audit")
     session.add(record)
-    session.commit()
+    session.flush()
     session.refresh(record)
+    if commit:
+        session.commit()
     return record
 
 
-def _get_or_create_check(session: Session, key: str, description: Optional[str]) -> Check:
+def _get_or_create_check(session: Session, key: str, description: Optional[str], *, commit: bool = True) -> Check:
     """Создаём описание проверки, если оно ещё не зарегистрировано."""
 
     record = session.query(Check).filter(Check.key == key).one_or_none()
     if record:
         if description and record.description != description:
             record.description = description
-            session.commit()
+            if commit:
+                session.commit()
         return record
+
     record = Check(key=key, description=description)
     session.add(record)
-    session.commit()
+    session.flush()
     session.refresh(record)
+    if commit:
+        session.commit()
     return record
 
 
-def _get_or_create_cms(session: Session, key: str, name: str) -> Cms:
+def _get_or_create_cms(session: Session, key: str, name: str, *, commit: bool = True) -> Cms:
     """Создаём запись CMS при необходимости."""
 
     record = session.query(Cms).filter(Cms.key == key).one_or_none()
     if record:
         if record.name != name:
             record.name = name
-            session.commit()
+            if commit:
+                session.commit()
         return record
+
     record = Cms(key=key, name=name)
     session.add(record)
-    session.commit()
+    session.flush()
     session.refresh(record)
+    if commit:
+        session.commit()
     return record
 
 
@@ -322,13 +335,19 @@ def update_check(
     check_key: str,
     row: CheckRow,
     description: Optional[str] = None,
+    *,
+    commit: bool = True,
 ) -> None:
     """
     Обновляет результаты конкретной проверки (например, Bitrix) в PostgreSQL.
+
+    commit=True (по умолчанию) сохраняет поведение прежней версии.
+    Для пакетной записи в конце домена используйте commit=False.
     """
 
-    domain_record = _get_or_create_domain(session, domain)
-    check_record = _get_or_create_check(session, check_key, description)
+    domain_record = _get_or_create_domain(session, domain, commit=commit)
+    check_record = _get_or_create_check(session, check_key, description, commit=commit)
+
     record = (
         session.query(DomainCheck)
         .filter(DomainCheck.domain_id == domain_record.id, DomainCheck.check_id == check_record.id)
@@ -350,14 +369,29 @@ def update_check(
             last_checked_ts=timestamp,
         )
         session.add(record)
-    session.commit()
+
+    if commit:
+        session.commit()
     logger.info("Обновлён результат проверки %s для домена %s", check_key, domain)
 
 
-def update_admin_panel(session: Session, domain: str, panel_key: str, row: AdminPanelRow) -> None:
-    """Обновляет статус доступности админки."""
+def update_admin_panel(
+    session: Session,
+    domain: str,
+    panel_key: str,
+    row: AdminPanelRow,
+    *,
+    commit: bool = True,
+) -> None:
+    """
+    Обновляет статус доступности админки.
 
-    domain_record = _get_or_create_domain(session, domain)
+    commit=True (по умолчанию) сохраняет прежнее поведение.
+    Для пакетной записи в конце домена используйте commit=False.
+    """
+
+    domain_record = _get_or_create_domain(session, domain, commit=commit)
+
     record = (
         session.query(AdminPanel)
         .filter(AdminPanel.domain_id == domain_record.id, AdminPanel.panel_key == panel_key)
@@ -381,15 +415,31 @@ def update_admin_panel(session: Session, domain: str, panel_key: str, row: Admin
             last_checked_ts=timestamp,
         )
         session.add(record)
-    session.commit()
+
+    if commit:
+        session.commit()
     logger.info("Обновлён статус админки %s для домена %s", panel_key, domain)
 
 
-def update_domain_cms(session: Session, domain: str, cms_key: str, cms_name: str, row: CmsRow) -> None:
-    """Фиксирует результаты определения CMS для домена."""
+def update_domain_cms(
+    session: Session,
+    domain: str,
+    cms_key: str,
+    cms_name: str,
+    row: CmsRow,
+    *,
+    commit: bool = True,
+) -> None:
+    """
+    Фиксирует результаты определения CMS для домена.
 
-    domain_record = _get_or_create_domain(session, domain)
-    cms_record = _get_or_create_cms(session, cms_key, cms_name)
+    commit=True (по умолчанию) сохраняет прежнее поведение.
+    Для пакетной записи в конце домена используйте commit=False.
+    """
+
+    domain_record = _get_or_create_domain(session, domain, commit=commit)
+    cms_record = _get_or_create_cms(session, cms_key, cms_name, commit=commit)
+
     record = (
         session.query(DomainCms)
         .filter(DomainCms.domain_id == domain_record.id, DomainCms.cms_id == cms_record.id)
@@ -411,14 +461,27 @@ def update_domain_cms(session: Session, domain: str, cms_key: str, cms_name: str
             last_checked_ts=timestamp,
         )
         session.add(record)
-    session.commit()
+
+    if commit:
+        session.commit()
     logger.info("Обновлена CMS %s для домена %s", cms_key, domain)
 
 
-def update_module_run(session: Session, domain: str, row: ModuleRunRow) -> None:
-    """Сохраняем запуск модуля в отдельную таблицу module_runs."""
+def update_module_run(
+    session: Session,
+    domain: str,
+    row: ModuleRunRow,
+    *,
+    commit: bool = True,
+) -> None:
+    """
+    Сохраняем запуск модуля в отдельную таблицу module_runs.
 
-    domain_record = _get_or_create_domain(session, domain)
+    commit=True (по умолчанию) сохраняет прежнее поведение.
+    Для пакетной записи в конце домена используйте commit=False.
+    """
+
+    domain_record = _get_or_create_domain(session, domain, commit=commit)
     record = ModuleRun(
         domain_id=domain_record.id,
         module_key=row.module_key,
@@ -431,7 +494,9 @@ def update_module_run(session: Session, domain: str, row: ModuleRunRow) -> None:
         error_message=row.error_message,
     )
     session.add(record)
-    session.commit()
+
+    if commit:
+        session.commit()
     logger.info(
         "Зафиксирован запуск модуля %s для домена %s (status=%s)",
         row.module_key,
@@ -549,3 +614,21 @@ def get_domain_report(session: Session, domain: str) -> Optional[dict]:
     }
     logger.info("Сформирован отчёт по домену: %s", normalized)
     return report
+
+
+def iter_domains(session: Session, limit: int | None = None, batch_size: int = 10_000) -> Iterable[str]:
+    """
+    Потоково возвращает домены по возрастанию id, без загрузки всех записей в память.
+
+    - yield_per(batch_size) просит SQLAlchemy читать порциями
+    - stream_results=True включает server-side cursor (для многих драйверов)
+    """
+
+    query = session.query(Domain.domain).order_by(Domain.id)
+    if limit is not None:
+        query = query.limit(limit)
+
+    query = query.yield_per(batch_size).execution_options(stream_results=True)
+
+    for (domain,) in query:
+        yield domain

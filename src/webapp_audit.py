@@ -2,84 +2,51 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Iterable, Optional
+import time
+from typing import AsyncIterator, Iterable, Optional
 
 import aiohttp
 
 from src.audit_modules.registry import get_registry
 from src.audit_modules.runner import run_modules_for_domain
 from src.audit_modules.types import AuditContext, ModuleRunSummary
-from src.settings.loader import load_settings
 from src.http import HttpClient
-from src.webapp_db import ModuleRunRow, update_admin_panel, update_check, update_domain_cms, update_module_run
+from src.settings.loader import load_settings
+from src.webapp_db import (
+    ModuleRunRow,
+    update_admin_panel,
+    update_check,
+    update_domain_cms,
+    update_module_run,
+)
 
 logger = logging.getLogger(__name__)
 
 
-class WebAuditor:
-    """
-    Аудитор для веб-админки.
-
-    Использует настройки из config.yaml и запускает подключаемые модули.
-    """
-
-    def __init__(self, module_keys: Optional[Iterable[str]] = None) -> None:
-        self._settings = load_settings()
-        self._module_keys = list(module_keys) if module_keys is not None else None
-
-    async def check_domains(self, domains: Iterable[str]) -> list[tuple[str, ModuleRunSummary]]:
-        """Запускаем аудит и возвращаем результаты по доменам."""
-
-        targets = list(domains)
-        if not targets:
-            logger.warning("Нет доменов для аудита")
-            return []
-
-        http = HttpClient(
-            rps = self._settings.app.rate_limit_rps,
-            total_timeout_s=self._settings.app.audit_timeout_total,
-        )
-        sem = asyncio.Semaphore(self._settings.app.audit_concurrency)
-
-        async with aiohttp.ClientSession() as session:
-            async def check_one(domain: str) -> tuple[str, ModuleRunSummary]:
-                async with sem:
-                    logger.info("Запуск проверки домена: %s", domain)
-                    context = AuditContext(
-                        domain=domain,
-                        session=session,
-                        http=http,
-                        config=self._settings,
-                    )
-                    summary = await run_modules_for_domain(context, self._module_keys)
-                    return domain, summary
-
-            tasks = [asyncio.create_task(check_one(domain)) for domain in targets]
-            results: list[tuple[str, ModuleRunSummary]] = []
-            done = 0
-            for task in asyncio.as_completed(tasks):
-                result = await task
-                results.append(result)
-                done += 1
-                logger.info("[audit] %s/%s done", done, len(targets))
-
-        logger.info("Аудит завершён, доменов обработано: %s", len(results))
-        return results
-
-
 def _persist_summary(domain: str, summary: ModuleRunSummary, session_factory) -> None:
-    """Сохраняет результаты модулей в базе данных."""
+    """
+    Сохраняет результаты модулей в PostgreSQL (webapp_db).
 
+    Важно:
+    - payload-и модулей сохраняются через module.persist(...)
+    - история запусков модулей — через update_module_run(...)
+    - агрегаты домена (checks/admin/cms) — через update_* helpers
+    """
     with session_factory() as session:
         registry = get_registry()
-        # Сохраняем модульные результаты через методы самих модулей.
+
+        # 1) Payload-и модулей
         for module_output in summary.module_outputs:
             module = registry.get(module_output.module_key)
             if module is None:
-                logger.warning("Модуль %s отсутствует в реестре при сохранении", module_output.module_key)
+                logger.warning(
+                    "[audit.persist] module missing in registry: key=%s (skip payload persist)",
+                    module_output.module_key,
+                )
                 continue
             module.persist(session, domain, module_output.payload)
-        # Фиксируем каждый запуск модуля отдельной записью для прозрачного аудита.
+
+        # 2) История запусков
         for module_run in summary.module_runs:
             update_module_run(
                 session,
@@ -95,12 +62,116 @@ def _persist_summary(domain: str, summary: ModuleRunSummary, session_factory) ->
                     error_message=module_run.error_message,
                 ),
             )
+
+        # 3) Обновления доменных сущностей
         for update in summary.check_updates:
             update_check(session, domain, update.key, update.row, description=update.description)
+
         for update in summary.admin_updates:
             update_admin_panel(session, domain, update.panel_key, update.row)
+
         for update in summary.cms_updates:
             update_domain_cms(session, domain, update.cms_key, update.cms_name, update.row)
+
+
+async def _audit_stream(
+    domains: Iterable[str],
+    *,
+    module_keys: Optional[Iterable[str]] = None,
+) -> AsyncIterator[tuple[str, ModuleRunSummary]]:
+    """
+    Потоковый движок аудита.
+
+    Гарантии по памяти:
+      - НЕ создаём list(domains)
+      - НЕ создаём список tasks на все домены
+      - Держим в памяти максимум ~concurrency задач (окно in-flight)
+
+    Поведение:
+      - дозапускаем задачи до заполнения окна
+      - ждём завершения хотя бы одной (FIRST_COMPLETED)
+      - yield-им результат немедленно
+      - дозапускаем следующую задачу
+    """
+    settings = load_settings()
+    normalized_module_keys = list(module_keys) if module_keys is not None else None
+
+    concurrency = int(settings.app.audit_concurrency)
+    if concurrency <= 0:
+        raise ValueError("settings.app.audit_concurrency must be > 0")
+
+    http = HttpClient(
+        rps=settings.app.rate_limit_rps,
+        total_timeout_s=settings.app.audit_timeout_total,
+    )
+
+    logger.info(
+        "[audit.stream] start: concurrency=%s rps=%s timeout_total=%ss modules=%s",
+        concurrency,
+        settings.app.rate_limit_rps,
+        settings.app.audit_timeout_total,
+        normalized_module_keys,
+    )
+
+    # Приводим domains к итератору (важно: не материализуем список).
+    it = iter(domains)
+
+    async with aiohttp.ClientSession() as session:
+
+        async def _check_one(domain: str) -> tuple[str, ModuleRunSummary]:
+            # Детальный лог — удобно для диагностики “какой домен сейчас пошёл”.
+            t0 = time.monotonic()
+            logger.info("[audit.stream] run domain=%s modules=%s", domain, normalized_module_keys)
+            context = AuditContext(domain=domain, session=session, http=http, config=settings)
+            summary = await run_modules_for_domain(context, normalized_module_keys)
+            dt_ms = int((time.monotonic() - t0) * 1000)
+            logger.info("[audit.stream] done domain=%s duration_ms=%s", domain, dt_ms)
+            return domain, summary
+
+        in_flight: set[asyncio.Task[tuple[str, ModuleRunSummary]]] = set()
+        produced = 0
+
+        def _schedule_next() -> bool:
+            """
+            Пытаемся взять следующий домен из итератора и запланировать задачу.
+            Возвращает True, если задача создана, иначе False (итератор исчерпан).
+            """
+            try:
+                domain = next(it)
+            except StopIteration:
+                return False
+
+            # Минимальная “санитарная” нормализация на всякий случай.
+            if isinstance(domain, str):
+                domain = domain.strip().lower()
+            else:
+                logger.warning("[audit.stream] non-string domain skipped: %r", domain)
+                return True  # продолжаем планирование дальше
+
+            task = asyncio.create_task(_check_one(domain))
+            in_flight.add(task)
+            return True
+
+        # Заполняем окно.
+        for _ in range(concurrency):
+            if not _schedule_next():
+                break
+
+        # Главный цикл: пока есть что ждать.
+        while in_flight:
+            done, pending = await asyncio.wait(in_flight, return_when=asyncio.FIRST_COMPLETED)
+            in_flight = set(pending)
+
+            for task in done:
+                domain, summary = await task
+                produced += 1
+                logger.info("[audit.stream] progress: produced=%s in_flight=%s", produced, len(in_flight))
+                yield domain, summary
+
+                # Дозаполняем окно ровно на 1 (или больше, если в итераторе были не-строки).
+                while len(in_flight) < concurrency:
+                    if not _schedule_next():
+                        break
 
 
 def run_audit_and_persist(
@@ -109,14 +180,21 @@ def run_audit_and_persist(
     module_keys: Optional[Iterable[str]] = None,
 ) -> int:
     """
-    Запускаем аудит и сохраняем результаты в PostgreSQL.
+    Синхронная обёртка: потоково аудируем и сразу persist-им.
 
-    Возвращаем количество обработанных доменов для удобства в логах.
+    Память:
+      - O(concurrency)
+    Надёжность:
+      - если процесс упал на середине, уже сохранённые домены останутся в БД.
     """
 
-    auditor = WebAuditor(module_keys=module_keys)
-    results = asyncio.run(auditor.check_domains(domains))
-    for domain, summary in results:
-        _persist_summary(domain, summary, session_factory)
-    logger.info("Аудит завершён, доменов обработано: %s", len(results))
-    return len(results)
+    async def _run() -> int:
+        saved = 0
+        async for domain, summary in _audit_stream(domains, module_keys=module_keys):
+            _persist_summary(domain, summary, session_factory)
+            saved += 1
+            logger.info("[audit.persist] saved=%s domain=%s", saved, domain)
+        logger.info("[audit] completed: processed=%s", saved)
+        return saved
+
+    return asyncio.run(_run())

@@ -16,29 +16,32 @@ def download_zip(
     *,
     timeout: int = 120,
     user_agent: str = DEFAULT_USER_AGENT,
+    chunk_size: int = 1024 * 256,
 ) -> Path:
     """
-    Скачивает ZIP-файл по URL во временный файл.
+    Скачивает ZIP-файл по URL во временный файл (стриминг, без загрузки всего в память).
 
     :param url: URL архива
     :param timeout: таймаут запроса (сек)
     :param user_agent: User-Agent для HTTP-запроса
+    :param chunk_size: размер чанка при чтении (байт)
     :return: путь к временному ZIP-файлу
     """
     logger.info("Скачивание ZIP: %s", url)
 
     req = Request(url, headers={"User-Agent": user_agent})
-    with urlopen(req, timeout=timeout) as resp:
-        data = resp.read()
-
     tmp_path = Path(tempfile.mkstemp(suffix=".zip")[1])
-    tmp_path.write_bytes(data)
 
-    logger.info(
-        "ZIP скачан: %s (%s bytes)",
-        tmp_path,
-        tmp_path.stat().st_size,
-    )
+    total = 0
+    with urlopen(req, timeout=timeout) as resp, tmp_path.open("wb") as out:
+        while True:
+            chunk = resp.read(chunk_size)
+            if not chunk:
+                break
+            out.write(chunk)
+            total += len(chunk)
+
+    logger.info("ZIP скачан: %s (%s bytes)", tmp_path, total)
     return tmp_path
 
 
@@ -86,7 +89,12 @@ def extract_txt_from_zip(
         out_path = out_dir / Path(candidate).name
 
         with zf.open(candidate) as src, out_path.open("wb") as dst:
-            dst.write(src.read())
+            # Читаем блоками — полезно на крупных txt
+            while True:
+                chunk = src.read(1024 * 256)
+                if not chunk:
+                    break
+                dst.write(chunk)
 
         logger.info("TXT извлечён: %s", out_path)
         return out_path

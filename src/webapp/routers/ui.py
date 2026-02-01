@@ -21,7 +21,6 @@ def index(request: Request, session=Depends(get_session)) -> HTMLResponse:
         {
             "request": request,
             "domains": domains,
-            "import_path": str(settings.app.import_file_path),
             "modules": list_modules(),
             "page": {"title": "WebAtlas — домены", "subtitle": "Домены и действия"},
         },

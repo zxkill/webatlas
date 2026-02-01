@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
-from src.domain_import import import_domains_via_copy
+from src.utils.domain_import import import_domains_via_copy
 from src.utils.zip_import import download_zip, extract_txt_from_zip
 from celery.schedules import crontab
 from src.settings import load_settings, configure_logging
@@ -47,7 +47,6 @@ celery_app.conf.beat_schedule = {
 }
 
 
-
 def _normalize_modules(modules: Optional[Iterable[str]] | str) -> list[str] | None:
     """
     Преобразует список модулей в удобный для логов формат.
@@ -67,10 +66,10 @@ def _normalize_modules(modules: Optional[Iterable[str]] | str) -> list[str] | No
 
 
 def _resolve_task_modules(
-    modules: Optional[Iterable[str]] | str,
-    extra_args: tuple[Any, ...],
-    extra_kwargs: dict[str, Any],
-    header_modules: Optional[Iterable[str]] | str = None,
+        modules: Optional[Iterable[str]] | str,
+        extra_args: tuple[Any, ...],
+        extra_kwargs: dict[str, Any],
+        header_modules: Optional[Iterable[str]] | str = None,
 ) -> list[str] | None:
     """
     Извлекает список модулей из аргументов Celery-задачи.
@@ -121,9 +120,9 @@ def _resolve_task_modules(
 
 
 def _resolve_task_domain(
-    domain: Optional[str],
-    extra_args: tuple[Any, ...],
-    extra_kwargs: dict[str, Any],
+        domain: Optional[str],
+        extra_args: tuple[Any, ...],
+        extra_kwargs: dict[str, Any],
 ) -> str:
     """
     Разбирает домен из набора аргументов Celery-задачи.
@@ -190,27 +189,32 @@ def add_domain_task(domain: str, source: str = "manual") -> dict[str, str]:
     return {"domain": record.domain, "source": record.source}
 
 
+from src.webapp_db import iter_domains  # добавьте импорт
+
+
 @celery_app.task(name="webatlas.audit_all")
 def audit_all_task(modules: Optional[Iterable[str]] = None) -> dict[str, int]:
-    """Запускаем аудит всех доменов из базы."""
-
     normalized_modules = _normalize_modules(modules)
     logger.info("Получена задача на аудит всех доменов (модули=%s)", normalized_modules)
+
     with db_state.session_factory() as session:
-        domains = [record.domain for record in list_domains(session, limit=1000000)]
-    processed = run_audit_and_persist(domains, db_state.session_factory, module_keys=normalized_modules)
+        domains_iter = iter_domains(session, limit=1_000_000, batch_size=100)
+
+        # Важно: итератор живёт пока открыт session, поэтому аудит запускаем внутри контекста.
+        processed = run_audit_and_persist(domains_iter, db_state.session_factory, module_keys=normalized_modules)
+
     return {"processed": processed}
 
 
 @celery_app.task(name="webatlas.audit_limit")
 def audit_limit_task(limit: int, modules: Optional[Iterable[str]] = None) -> dict[str, int]:
-    """Запускаем аудит ограниченного числа доменов."""
-
     normalized_modules = _normalize_modules(modules)
     logger.info("Получена задача на аудит доменов с лимитом: %s (модули=%s)", limit, normalized_modules)
+
     with db_state.session_factory() as session:
-        domains = [record.domain for record in list_domains(session, limit=limit)]
-    processed = run_audit_and_persist(domains, db_state.session_factory, module_keys=normalized_modules)
+        domains_iter = iter_domains(session, limit=limit, batch_size=100)
+        processed = run_audit_and_persist(domains_iter, db_state.session_factory, module_keys=normalized_modules)
+
     return {"processed": processed}
 
 
@@ -246,6 +250,7 @@ def audit_domain_task(self, *task_args: Any, **task_kwargs: Any) -> dict[str, in
     )
     processed = run_audit_and_persist([domain], db_state.session_factory, module_keys=normalized_modules)
     return {"processed": processed}
+
 
 @celery_app.task(name="webatlas.import_domains_from_zip")
 def import_domains_from_zip_task() -> dict[str, int]:

@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from src.domain_utils import normalize_domain
+from src.utils.domains import normalize_domain
 
 logger = logging.getLogger(__name__)
 
@@ -17,8 +17,8 @@ class SupportsCursor(Protocol):
     Протокол для DB-API соединения, чтобы типизировать доступ к cursor().
     """
 
-    def cursor(self):  # noqa: ANN001 - DB-API курсоры имеют гибкий интерфейс
-        """Возвращает курсор для выполнения SQL и COPY."""
+    def cursor(self):  # noqa: ANN001
+        """Возвращает курсор DB-API."""
 
 
 @dataclass(frozen=True)
@@ -45,10 +45,10 @@ def import_domains_via_copy(
     Быстрый импорт доменов через staging-таблицу и COPY.
 
     Алгоритм:
-    1) Нормализуем домены построчно в временный файл (без хранения всего списка в памяти).
-    2) TRUNCATE staging-таблицы.
-    3) COPY в staging.
-    4) INSERT ... SELECT ... ON CONFLICT DO NOTHING.
+      1) Нормализуем домены построчно во временный файл (O(1) по памяти).
+      2) TRUNCATE staging.
+      3) COPY в staging.
+      4) INSERT ... ON CONFLICT DO NOTHING.
     """
 
     log = log or logger
@@ -63,16 +63,15 @@ def import_domains_via_copy(
     )
 
     try:
-        unique_domains = 0
         inserted_domains = 0
 
         with raw_connection.cursor() as cursor:
+            # Быстрее на bulk-операциях (снижает fsync)
             cursor.execute("SET LOCAL synchronous_commit TO off;")
-            # Шаг 1. Очищаем staging-таблицу перед каждой загрузкой.
+
             cursor.execute("TRUNCATE domains_staging;")
             log.debug("staging таблица очищена")
 
-            # Шаг 2. Быстро заливаем подготовленные домены через COPY.
             if normalized_domains > 0:
                 with open(temp_path, "r", encoding="utf-8") as handle:
                     cursor.copy_from(handle, "domains_staging", columns=("domain",))
@@ -80,18 +79,6 @@ def import_domains_via_copy(
             else:
                 log.warning("Нет доменов для COPY после нормализации")
 
-            # Шаг 3. Считаем статистику по staging.
-            cursor.execute("SELECT count(*) FROM domains_staging;")
-            normalized_in_db = int(cursor.fetchone()[0])
-            cursor.execute("SELECT count(DISTINCT domain) FROM domains_staging;")
-            unique_domains = int(cursor.fetchone()[0])
-            log.debug(
-                "Статистика staging: rows=%s unique=%s",
-                normalized_in_db,
-                unique_domains,
-            )
-
-            # Шаг 4. Вставляем только новые домены.
             cursor.execute(
                 """
                 INSERT INTO domains (domain, source)
@@ -101,18 +88,18 @@ def import_domains_via_copy(
                 """,
                 (source,),
             )
-            # rowcount может отсутствовать у фейковых курсоров в тестах, поэтому защищаемся.
+
             inserted_domains = int(getattr(cursor, "rowcount", 0) or 0)
-            if inserted_domains == 0 and unique_domains > 0:
-                # Фолбек для тестовых курсоров без rowcount и для движков без подсчёта строк.
-                inserted_domains = unique_domains
+
             log.info("INSERT завершён: inserted=%s", inserted_domains)
 
         raw_connection.commit()
-    except Exception:  # noqa: BLE001 - подробный лог с роллбеком важен для мониторинга
+
+    except Exception:  # noqa: BLE001
         raw_connection.rollback()
         log.exception("Ошибка импорта доменов через COPY")
         raise
+
     finally:
         _safe_remove_temp_file(temp_path, log=log)
 
@@ -120,7 +107,6 @@ def import_domains_via_copy(
     return CopyImportStats(
         total_lines=total_lines,
         normalized_domains=normalized_domains,
-        unique_domains=unique_domains,
         inserted_domains=inserted_domains,
         skipped_duplicates=skipped_duplicates,
     )
@@ -128,8 +114,10 @@ def import_domains_via_copy(
 
 def _prepare_normalized_file(path: str, *, log: logging.Logger) -> tuple[Path, int, int]:
     """
-    Построчно нормализуем домены и пишем их в временный файл, чтобы не держать
-    миллионы строк в памяти.
+    Построчно нормализуем домены и пишем во временный файл.
+
+    Память:
+      - O(1) по входному файлу
     """
 
     input_path = Path(path)
@@ -144,7 +132,7 @@ def _prepare_normalized_file(path: str, *, log: logging.Logger) -> tuple[Path, i
     os.close(fd)
     temp_path = Path(temp_name)
 
-    with open(input_path, "r", encoding="utf-8") as src, open(temp_path, "w", encoding="utf-8") as dst:
+    with input_path.open("r", encoding="utf-8") as src, temp_path.open("w", encoding="utf-8") as dst:
         for line_number, line in enumerate(src, start=1):
             total_lines += 1
             normalized = normalize_domain(line)
@@ -158,10 +146,6 @@ def _prepare_normalized_file(path: str, *, log: logging.Logger) -> tuple[Path, i
 
 
 def _safe_remove_temp_file(path: Path, *, log: logging.Logger) -> None:
-    """
-    Аккуратно удаляем временный файл, чтобы не оставлять мусор на диске.
-    """
-
     try:
         path.unlink(missing_ok=True)
         log.debug("Временный файл удалён: %s", path)

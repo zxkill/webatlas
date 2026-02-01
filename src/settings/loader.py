@@ -30,7 +30,6 @@ class RuntimeSettings:
 class AppSettings:
     rate_limit_rps: float
     import_url_template: str
-    import_file_path: str
     audit_concurrency: int
     audit_timeout_total: int
 
@@ -137,7 +136,6 @@ def load_settings(default_yaml_path: str = "config.yaml") -> Settings:
     app = AppSettings(
         rate_limit_rps=float(rate["rps"]),
         import_url_template=str(url_template),
-        import_file_path=str(imp["file_path"]),
         audit_concurrency=int(audit["concurrency"]),
         audit_timeout_total=int(timeouts["total"]),
     )
