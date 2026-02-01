@@ -5,7 +5,7 @@ from collections.abc import Iterable
 
 from src.audit_modules.availability.availability import AvailabilityModule
 from src.audit_modules.admin_detect.admin_detect import AdminDetectModule
-from src.audit_modules.cms_detect.bitrix_detect import BitrixDetectModule
+from src.audit_modules.cms_detect.module import CmsDetectModule
 from src.audit_modules.tls_certificate.tls_certificate import TlsCertificateModule
 from src.audit_modules.types import AuditModule
 
@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 MODULES: list[AuditModule] = [
     AvailabilityModule(),
     TlsCertificateModule(),
-    BitrixDetectModule(),
+    CmsDetectModule(),
     AdminDetectModule(),
 ]
 

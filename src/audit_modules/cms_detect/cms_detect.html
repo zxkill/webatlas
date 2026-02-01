@@ -1,0 +1,145 @@
+{# src/audit_modules/cms_detect/cms_detect.html #}
+{% from "partials/_status.html" import status_pill %}
+
+{% set headline = block.headline %}
+{% set kpis = block.kpis or {} %}
+{% set insights = block.insights or [] %}
+{% set timeline = block.timeline or [] %}
+{% set candidates = block.top_candidates or [] %}
+
+{# status для pill: ok / warning / critical #}
+{% set st = 'ok' if (kpis.confidence|default(0)) >= 70 else 'warning' if (kpis.confidence|default(0)) >= 35 else 'critical' %}
+
+<div class="card-header">
+  <div>
+    <p class="card-title">{{ block.name }}</p>
+    <p class="card-subtitle">{{ block.description }}</p>
+  </div>
+
+  {{ status_pill(st) }}
+</div>
+
+<div class="card-body stack">
+
+  {# === HEADLINE === #}
+  {% if headline %}
+    <div class="card" style="margin:0; background:color-mix(in oklab, var(--surface), var(--surface-2) 25%);">
+      <div class="card-body" style="padding:14px;">
+        <p style="margin:0; font-size:16px; font-weight:700;">
+          {{ headline }}
+        </p>
+        <p class="hint" style="margin-top:6px;">
+          Оценка основана на сигнатурах в headers/cookies/HTML главной страницы (без активных probe-запросов).
+        </p>
+      </div>
+    </div>
+  {% endif %}
+
+  {# === KPIs === #}
+  <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(160px,1fr)); gap:10px;">
+    {% if kpis.status is not none %}
+      <div class="card">
+        <div class="card-body">
+          <p class="hint">Статус</p>
+          <p style="font-size:18px; font-weight:700;">{{ kpis.status }}</p>
+        </div>
+      </div>
+    {% endif %}
+
+    {% if kpis.confidence is not none %}
+      <div class="card">
+        <div class="card-body">
+          <p class="hint">Уверенность</p>
+          <p style="font-size:18px; font-weight:700;">{{ kpis.confidence }}</p>
+        </div>
+      </div>
+    {% endif %}
+
+    {% if kpis.used_url is not none %}
+      <div class="card">
+        <div class="card-body">
+          <p class="hint">URL (итог)</p>
+          <p class="mono" style="font-size:12px; margin:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+            {{ kpis.used_url }}
+          </p>
+        </div>
+      </div>
+    {% endif %}
+  </div>
+
+  {# === CANDIDATES === #}
+  {% if candidates %}
+    <div class="card" style="margin:0;">
+      <div class="card-header">
+        <p class="card-title">Кандидаты (топ)</p>
+      </div>
+      <div class="card-body">
+        <div class="stack" style="gap:10px;">
+          {% for c in candidates %}
+            <div class="card" style="margin:0;">
+              <div class="card-body" style="padding:12px;">
+                <div style="display:flex; justify-content:space-between; gap:10px; align-items:flex-start;">
+                  <div>
+                    <div style="font-weight:700;">{{ c.cms_name }} <span class="hint">({{ c.cms_key }})</span></div>
+                    <div class="hint">статус: <span class="mono">{{ c.status }}</span> · score: <span class="mono">{{ c.score }}</span></div>
+                  </div>
+                  {% set cst = 'ok' if c.score >= 70 else 'warning' if c.score >= 35 else 'critical' %}
+                  {{ status_pill(cst) }}
+                </div>
+
+                {% if c.signals %}
+                  <div style="margin-top:10px;">
+                    <p class="hint" style="margin:0 0 6px 0;">Сигналы</p>
+                    <ul style="margin:0; padding-left:18px;">
+                      {% for s in c.signals %}
+                        <li style="margin:4px 0;">
+                          <span class="mono">{{ s.type }}</span> · <code>{{ s.value }}</code>
+                        </li>
+                      {% endfor %}
+                    </ul>
+                  </div>
+                {% endif %}
+              </div>
+            </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  {% endif %}
+
+  {# === INSIGHTS === #}
+  {% if insights %}
+    <div class="card" style="margin:0;">
+      <div class="card-body">
+        <p class="hint" style="margin-bottom:6px;">Выводы</p>
+        <ul style="margin:0; padding-left:18px;">
+          {% for i in insights %}
+            <li style="margin:4px 0;">{{ i }}</li>
+          {% endfor %}
+        </ul>
+      </div>
+    </div>
+  {% endif %}
+
+  {# === TIMELINE === #}
+  {% if timeline %}
+    <div class="card" style="margin:0;">
+      <div class="card-header">
+        <p class="card-title">Последние проверки</p>
+      </div>
+      <div class="card-body">
+        <div class="stack">
+          {% for t in timeline %}
+            <div style="display:flex; gap:10px; align-items:flex-start;">
+              <span class="mono">{{ t.timestamp }}</span>
+              <div>
+                <div>{{ t.title }}</div>
+              </div>
+            </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  {% endif %}
+
+</div>
