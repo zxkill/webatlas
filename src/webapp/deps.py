@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from collections.abc import Generator
 
-from src.webapp_config import load_webapp_config
+from src.settings.loader import load_settings
 from src.webapp_db import create_db_state, init_db
 
-config = load_webapp_config()
-state = create_db_state(config.database_url)
+settings = load_settings()
+
+state = create_db_state(settings.runtime.database_url)
 init_db(state)
 
 

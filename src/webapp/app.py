@@ -8,6 +8,9 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from jinja2 import ChoiceLoader, Environment, FileSystemLoader
 
+from src.settings.loader import load_settings
+from src.settings.logging import configure_logging
+
 from .routers.admin import router as admin_router
 from .routers.ui import router as ui_router
 
@@ -62,13 +65,39 @@ def _build_templates() -> Jinja2Templates:
 
 
 def create_app() -> FastAPI:
+    """
+    Главная фабрика FastAPI приложения.
+
+    Важно:
+    - Загружаем settings (ENV + YAML) один раз при старте.
+    - Настраиваем логирование в stdout на уровне, заданном окружением.
+    - Кладём settings и templates в app.state для доступа из роутеров/сервисов.
+    """
+    # 1) Settings (ENV + YAML)
+    settings = load_settings()
+
+    # 2) Logging (stdout, docker-friendly)
+    configure_logging(settings.runtime.log_level)
+
+    logger.info(
+        "[ui] app starting with host=%s port=%s log_level=%s",
+        settings.runtime.app_host,
+        settings.runtime.app_port,
+        settings.runtime.log_level,
+    )
+
     app = FastAPI(title="WebAtlas UI", version="1.4.0")
 
-    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
-
+    # 3) Shared state (settings/templates)
+    app.state.settings = settings
     app.state.templates = _build_templates()
 
+    # 4) Static files
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+    # 5) Routers
     app.include_router(ui_router)
     app.include_router(admin_router)
 
+    logger.info("[ui] app created successfully")
     return app

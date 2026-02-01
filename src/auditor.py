@@ -8,7 +8,7 @@ import aiohttp
 
 from src.audit_modules.runner import run_modules_for_domain
 from src.audit_modules.types import AuditContext, ModuleRunSummary
-from src.config import AppConfig
+from src.settings import load_settings
 from src.db import Database
 from src.webapp_db import ModuleRunRow
 from src.http import HttpClient
@@ -24,8 +24,8 @@ class Auditor:
     Использует подключаемые модули и сохраняет результаты через Database.
     """
 
-    def __init__(self, cfg: AppConfig, module_keys: Optional[Iterable[str]] = None) -> None:
-        self._cfg = cfg
+    def __init__(self, module_keys: Optional[Iterable[str]] = None) -> None:
+        self._settings = load_settings()
         self._module_keys = list(module_keys) if module_keys is not None else None
 
     def run(self) -> None:
@@ -33,18 +33,14 @@ class Auditor:
         asyncio.run(self._run_async())
 
     async def _run_async(self) -> None:
-        db = Database(self._cfg.db.url)
+        db = Database(self._settings.runtime.database_url)
         targets = db.load_domains()
 
-        if not targets:
-            db.close()
-            raise SystemExit("Нет доменов для аудита. Сначала импортируйте список доменов.")
-
         http = HttpClient(
-            rps=self._cfg.rate_limit.rps,
-            total_timeout_s=self._cfg.audit.timeouts.total,
+            rps=self._settings.app.rate_limit_rps,
+            total_timeout_s=self._settings.app.audit_timeout_total,
         )
-        sem = asyncio.Semaphore(self._cfg.audit.concurrency)
+        sem = asyncio.Semaphore(self._settings.app.audit_concurrency)
 
         async with aiohttp.ClientSession() as session:
             async def check_one(domain: str) -> tuple[str, ModuleRunSummary]:
@@ -54,7 +50,7 @@ class Auditor:
                         domain=domain,
                         session=session,
                         http=http,
-                        config=self._cfg,
+                        config=self._settings,
                     )
                     summary = await run_modules_for_domain(context, self._module_keys)
                     return domain, summary

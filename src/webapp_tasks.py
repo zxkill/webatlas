@@ -8,35 +8,32 @@ from typing import Any, Iterable, Optional
 from src.domain_import import import_domains_via_copy
 from src.webapp_import_zip import download_zip, extract_txt_from_zip
 from celery.schedules import crontab
-from src.config import load_config
+from src.settings import load_settings, configure_logging
 
 from celery import Celery
 
 from src.webapp_audit import run_audit_and_persist
-from src.webapp_config import load_webapp_config
 from src.webapp_db import (
     create_db_state,
     create_domain,
     init_db,
     list_domains,
 )
-from src.webapp_logging import configure_logging
 
 logger = logging.getLogger(__name__)
 
-configure_logging()
+settings = load_settings()
+configure_logging(settings.runtime.log_level)
 
-config = load_webapp_config()
-
-db_state = create_db_state(config.database_url)
+db_state = create_db_state(settings.runtime.database_url)
 init_db(db_state)
 
 celery_app = Celery(
     "webatlas",
-    broker=config.celery_broker_url,
-    backend=config.celery_backend_url,
+    broker=settings.runtime.celery_broker_url,
+    backend=settings.runtime.celery_backend_url,
 )
-celery_app.conf.task_always_eager = config.celery_always_eager
+celery_app.conf.task_always_eager = settings.runtime.celery_always_eager
 celery_app.conf.task_eager_propagates = True
 
 celery_app.conf.timezone = "Europe/Moscow"
@@ -193,22 +190,6 @@ def add_domain_task(domain: str, source: str = "manual") -> dict[str, str]:
     return {"domain": record.domain, "source": record.source}
 
 
-@celery_app.task(name="webatlas.import_domains_from_file")
-def import_domains_from_file_task(file_path: str) -> dict[str, int]:
-    """Импортируем домены из файла по запросу админки."""
-
-    logger.info("Получена задача на импорт доменов из файла: %s", file_path)
-    with db_state.session_factory() as session:
-        stats = import_domains_from_file(session, file_path, source="file")
-    return {
-        "total_lines": stats.total_lines,
-        "normalized_domains": stats.normalized_domains,
-        "unique_domains": stats.unique_domains,
-        "inserted_domains": stats.inserted_domains,
-        "skipped_duplicates": stats.skipped_duplicates,
-    }
-
-
 @celery_app.task(name="webatlas.audit_all")
 def audit_all_task(modules: Optional[Iterable[str]] = None) -> dict[str, int]:
     """Запускаем аудит всех доменов из базы."""
@@ -271,8 +252,7 @@ def import_domains_from_zip_task() -> dict[str, int]:
     """
     Ночной импорт: скачать ZIP по URL из конфига, извлечь TXT, импортировать домены.
     """
-    app_cfg = load_config()
-    url = app_cfg.import_cfg.url_template
+    url = settings.app.import_url_template.format(zone="ru")
 
     logger.info("Ночной импорт доменов из ZIP: %s", url)
 

@@ -6,7 +6,7 @@ from typing import Any, Iterable, Optional, Protocol
 
 from sqlalchemy.orm import Session
 
-from src.config import AppConfig
+from src.settings.loader import load_settings
 from src.http import HttpClient
 from src.webapp_db import AdminPanelRow, CheckRow, CmsRow
 
@@ -24,7 +24,7 @@ class AuditContext:
     domain: str
     session: Any
     http: HttpClient
-    config: AppConfig
+    config: load_settings()
     data: dict[str, Any] = field(default_factory=dict)
 
 

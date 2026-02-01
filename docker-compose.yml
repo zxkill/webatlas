@@ -13,6 +13,7 @@ services:
       CELERY_BACKEND_URL: redis://redis:6379/2
       APP_HOST: 0.0.0.0
       APP_PORT: 8088
+      APP_CONFIG_PATH: /app/config.yaml
     volumes:
       - ./src:/app/src
       - ./config.yaml:/app/config.yaml:ro

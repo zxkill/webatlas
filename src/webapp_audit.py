@@ -9,7 +9,7 @@ import aiohttp
 from src.audit_modules.registry import get_registry
 from src.audit_modules.runner import run_modules_for_domain
 from src.audit_modules.types import AuditContext, ModuleRunSummary
-from src.config import load_config
+from src.settings.loader import load_settings
 from src.http import HttpClient
 from src.webapp_db import ModuleRunRow, update_admin_panel, update_check, update_domain_cms, update_module_run
 
@@ -24,7 +24,7 @@ class WebAuditor:
     """
 
     def __init__(self, module_keys: Optional[Iterable[str]] = None) -> None:
-        self._cfg = load_config()
+        self._settings = load_settings()
         self._module_keys = list(module_keys) if module_keys is not None else None
 
     async def check_domains(self, domains: Iterable[str]) -> list[tuple[str, ModuleRunSummary]]:
@@ -36,10 +36,10 @@ class WebAuditor:
             return []
 
         http = HttpClient(
-            rps=self._cfg.rate_limit.rps,
-            total_timeout_s=self._cfg.audit.timeouts.total,
+            rps=self._settings.rate_limit.rps,
+            total_timeout_s=self._settings.audit.timeouts.total,
         )
-        sem = asyncio.Semaphore(self._cfg.audit.concurrency)
+        sem = asyncio.Semaphore(self._settings.audit.concurrency)
 
         async with aiohttp.ClientSession() as session:
             async def check_one(domain: str) -> tuple[str, ModuleRunSummary]:
@@ -49,7 +49,7 @@ class WebAuditor:
                         domain=domain,
                         session=session,
                         http=http,
-                        config=self._cfg,
+                        config=self._settings,
                     )
                     summary = await run_modules_for_domain(context, self._module_keys)
                     return domain, summary

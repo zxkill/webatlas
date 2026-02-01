@@ -4,7 +4,6 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse
 
 from src.audit_modules.registry import list_modules
-from src.config import load_config
 from ..deps import get_session
 from ..services.domains import list_domains_svc, get_domain_report_svc
 
@@ -13,16 +12,16 @@ router = APIRouter()
 
 @router.get("/", response_class=HTMLResponse)
 def index(request: Request, session=Depends(get_session)) -> HTMLResponse:
-    app_cfg = load_config()
+    settings = request.app.state.settings
     domains = list_domains_svc(session)
-    templates = request.app.state.templates  # <-- ключевой момент
+    templates = request.app.state.templates
 
     return templates.TemplateResponse(
         "index.html",
         {
             "request": request,
             "domains": domains,
-            "import_path": str(app_cfg.import_cfg.file_path),
+            "import_path": str(settings.app.import_file_path),
             "modules": list_modules(),
             "page": {"title": "WebAtlas — домены", "subtitle": "Домены и действия"},
         },
