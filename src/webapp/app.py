@@ -16,9 +16,9 @@ from .routers.ui import router as ui_router
 
 logger = logging.getLogger(__name__)
 
-BASE_DIR = Path(__file__).resolve().parent           # /app/src/webapp
-TEMPLATES_DIR = BASE_DIR / "templates"               # /app/src/webapp/templates
-STATIC_DIR = BASE_DIR / "static"                     # /app/src/webapp/static
+BASE_DIR = Path(__file__).resolve().parent  # /app/src/webapp
+TEMPLATES_DIR = BASE_DIR / "templates"  # /app/src/webapp/templates
+STATIC_DIR = BASE_DIR / "static"  # /app/src/webapp/static
 
 # Корень src: /app/src
 SRC_DIR = BASE_DIR.parent
@@ -43,8 +43,8 @@ def _build_templates() -> Jinja2Templates:
     # прозрачно комбинировать несколько загрузчиков и расширять в будущем.
     loader = ChoiceLoader(
         [
-            FileSystemLoader(str(TEMPLATES_DIR)),      # report.html, base.html, partials/*
-            FileSystemLoader(str(SRC_DIR)),            # audit_modules/** (путь относительно /app/src)
+            FileSystemLoader(str(TEMPLATES_DIR)),  # report.html, base.html, partials/*
+            FileSystemLoader(str(SRC_DIR)),  # audit_modules/** (путь относительно /app/src)
         ]
     )
 
@@ -101,3 +101,6 @@ def create_app() -> FastAPI:
 
     logger.info("[ui] app created successfully")
     return app
+
+
+app = create_app()

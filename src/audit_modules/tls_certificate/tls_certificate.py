@@ -177,7 +177,7 @@ class TlsCertificateModule:
         - (Диагностика) цепочка сертификатов, если доступна в runtime
         """
 
-        timeout = max(1, int(context.config.audit.timeouts.total))
+        timeout = max(1, int(context.config.app.audit_timeout_total))
         domain = context.domain
 
         logger.info("[tls] старт проверки: domain=%s timeout=%ss", domain, timeout)

@@ -36,10 +36,10 @@ class WebAuditor:
             return []
 
         http = HttpClient(
-            rps=self._settings.rate_limit.rps,
-            total_timeout_s=self._settings.audit.timeouts.total,
+            rps = self._settings.app.rate_limit_rps,
+            total_timeout_s=self._settings.app.audit_timeout_total,
         )
-        sem = asyncio.Semaphore(self._settings.audit.concurrency)
+        sem = asyncio.Semaphore(self._settings.app.audit_concurrency)
 
         async with aiohttp.ClientSession() as session:
             async def check_one(domain: str) -> tuple[str, ModuleRunSummary]:
