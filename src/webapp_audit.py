@@ -5,8 +5,6 @@ import logging
 import time
 from typing import AsyncIterator, Iterable, Optional
 
-import aiohttp
-
 from src.audit_modules.registry import get_registry
 from src.audit_modules.runner import run_modules_for_domain
 from src.audit_modules.types import AuditContext, ModuleRunSummary
@@ -116,7 +114,7 @@ async def _audit_stream(
     # Приводим domains к итератору (важно: не материализуем список).
     it = iter(domains)
 
-    async with aiohttp.ClientSession() as session:
+    async with http.create_session() as session:
 
         async def _check_one(domain: str) -> tuple[str, ModuleRunSummary]:
             # Детальный лог — удобно для диагностики “какой домен сейчас пошёл”.

@@ -35,11 +35,11 @@ class CopyImportStats:
 
 
 def import_domains_via_copy(
-    raw_connection: SupportsCursor,
-    path: str,
-    source: str,
-    *,
-    log: logging.Logger | None = None,
+        raw_connection: SupportsCursor,
+        path: str,
+        source: str,
+        *,
+        log: logging.Logger | None = None,
 ) -> CopyImportStats:
     """
     Быстрый импорт доменов через staging-таблицу и COPY.
@@ -48,7 +48,8 @@ def import_domains_via_copy(
       1) Нормализуем домены построчно во временный файл (O(1) по памяти).
       2) TRUNCATE staging.
       3) COPY в staging.
-      4) INSERT ... ON CONFLICT DO NOTHING.
+      4) (метрики) считаем total rows и unique domains в staging.
+      5) INSERT ... ON CONFLICT DO NOTHING.
     """
 
     log = log or logger
@@ -62,11 +63,11 @@ def import_domains_via_copy(
         temp_path,
     )
 
-    try:
-        inserted_domains = 0
+    unique_domains = 0
+    inserted_domains = 0
 
+    try:
         with raw_connection.cursor() as cursor:
-            # Быстрее на bulk-операциях (снижает fsync)
             cursor.execute("SET LOCAL synchronous_commit TO off;")
 
             cursor.execute("TRUNCATE domains_staging;")
@@ -76,6 +77,32 @@ def import_domains_via_copy(
                 with open(temp_path, "r", encoding="utf-8") as handle:
                     cursor.copy_from(handle, "domains_staging", columns=("domain",))
                 log.info("COPY завершён, домены загружены в staging")
+
+                try:
+                    cursor.execute(
+                        """
+                        SELECT COUNT(*)::bigint AS rows_total, COUNT(DISTINCT domain) ::bigint AS unique_total
+                        FROM domains_staging;
+                        """
+                    )
+                    row = cursor.fetchone()
+                    if row:
+                        rows_total = int(row[0] or 0)
+                        unique_domains = int(row[1] or 0)
+
+                        # Это диагностически полезно: можно сравнивать с normalized_domains.
+                        log.info(
+                            "Staging статистика: rows=%s unique_domains=%s (normalized=%s, source=%s)",
+                            rows_total,
+                            unique_domains,
+                            normalized_domains,
+                            source,
+                        )
+                except Exception:  # noqa: BLE001
+                    # Метрики не должны ломать импорт — фиксируем и продолжаем.
+                    unique_domains = 0
+                    log.exception("Не удалось посчитать unique_domains в staging (source=%s)", source)
+
             else:
                 log.warning("Нет доменов для COPY после нормализации")
 
@@ -90,7 +117,6 @@ def import_domains_via_copy(
             )
 
             inserted_domains = int(getattr(cursor, "rowcount", 0) or 0)
-
             log.info("INSERT завершён: inserted=%s", inserted_domains)
 
         raw_connection.commit()
@@ -103,10 +129,22 @@ def import_domains_via_copy(
     finally:
         _safe_remove_temp_file(temp_path, log=log)
 
+    # Если unique_domains не смогли посчитать (0), используем normalized_domains как безопасную подстановку,
+    # чтобы статистика в UI не выглядела «пустой».
+    if unique_domains <= 0 and normalized_domains > 0:
+        log.warning(
+            "unique_domains не определён (0). Используем normalized_domains=%s как fallback (source=%s)",
+            normalized_domains,
+            source,
+        )
+        unique_domains = normalized_domains
+
     skipped_duplicates = max(normalized_domains - inserted_domains, 0)
+
     return CopyImportStats(
         total_lines=total_lines,
         normalized_domains=normalized_domains,
+        unique_domains=unique_domains,
         inserted_domains=inserted_domains,
         skipped_duplicates=skipped_duplicates,
     )
