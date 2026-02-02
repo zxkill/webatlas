@@ -13,3 +13,5 @@ python-multipart
 watchfiles
 jinja2
 Brotli
+ipwhois
+dnspython

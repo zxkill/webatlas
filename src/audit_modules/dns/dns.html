@@ -1,0 +1,351 @@
+{# src/webapp/templates/audit_modules/dns/dns.html #}
+{% from "partials/_status.html" import status_pill %}
+
+{% set headline = block.headline %}
+{% set kpis = block.kpis or {} %}
+{% set insights = block.insights or [] %}
+{% set timeline = block.timeline or [] %}
+{% set matrix = block.matrix or {} %}
+{% set rr_types = (block.checks.rr_types if block.checks and block.checks.rr_types else []) %}
+{% set resolvers = (block.checks.resolvers if block.checks and block.checks.resolvers else []) %}
+
+<style>
+  /* --- DNS локальная палитра (под тёмную тему) --- */
+  .dns-table { min-width: 920px; border-collapse: separate; border-spacing: 0; }
+  .dns-cell { white-space: nowrap; vertical-align: top; }
+
+  /* Ховер по строке для читабельности */
+  .dns-table tbody tr:hover td {
+    background: color-mix(in oklab, var(--surface), white 3%);
+  }
+
+  .dns-meta { display: inline-flex; gap: 10px; align-items: center; }
+
+  /* Бейджи: делаем реально заметными */
+  .dns-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 22px;
+    padding: 0 10px;
+    border-radius: 999px;
+    font-weight: 800;
+    font-size: 12px;
+    letter-spacing: 0.3px;
+    border: 1px solid transparent;
+  }
+
+  .dns-badge-ok {
+    color: color-mix(in oklab, #39D98A, white 12%);
+    background: color-mix(in oklab, #39D98A, transparent 88%);
+    border-color: color-mix(in oklab, #39D98A, transparent 65%);
+  }
+
+  .dns-badge-fail {
+    color: color-mix(in oklab, #FF5C7A, white 10%);
+    background: color-mix(in oklab, #FF5C7A, transparent 88%);
+    border-color: color-mix(in oklab, #FF5C7A, transparent 65%);
+  }
+
+  .dns-badge-na {
+    color: color-mix(in oklab, #AAB3C5, white 0%);
+    background: color-mix(in oklab, #AAB3C5, transparent 92%);
+    border-color: color-mix(in oklab, #AAB3C5, transparent 70%);
+  }
+
+  /* TTL — менее “плоский”, но не кричит */
+  .dns-ttl {
+    display: inline-flex;
+    align-items: center;
+    height: 22px;
+    padding: 0 8px;
+    border-radius: 999px;
+    font-size: 12px;
+    color: color-mix(in oklab, var(--text), white 10%);
+    background: color-mix(in oklab, var(--surface-2), white 4%);
+    border: 1px solid color-mix(in oklab, var(--border), white 8%);
+  }
+
+  /* “детали” — делаем как лёгкую кнопку/линк */
+  .dns-more {
+    height: 22px;
+    padding: 0 8px;
+    border-radius: 8px;
+    font-size: 12px;
+    cursor: pointer;
+    color: color-mix(in oklab, #7AA8FF, white 5%);
+    background: color-mix(in oklab, #7AA8FF, transparent 92%);
+    border: 1px solid color-mix(in oklab, #7AA8FF, transparent 72%);
+  }
+  .dns-more:hover {
+    background: color-mix(in oklab, #7AA8FF, transparent 88%);
+  }
+
+  /* Детали — выделяем блок мягким контуром */
+  .dns-details td { padding-top: 10px; padding-bottom: 12px; }
+  .dns-details-box {
+    border: 1px solid color-mix(in oklab, var(--border), white 10%);
+    background: color-mix(in oklab, var(--surface), var(--surface-2) 22%);
+    border-radius: 12px;
+    padding: 12px 14px;
+  }
+  .dns-details-title { font-weight: 800; margin-bottom: 8px; }
+  .dns-details-grid { display: grid; grid-template-columns: 1fr; gap: 10px; }
+  .dns-details-mono {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    font-size: 12.5px;
+    line-height: 1.45;
+    color: color-mix(in oklab, var(--text), white 8%);
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  /* На широких экранах делаем 2 колонки: ответы | диагностика */
+  @media (min-width: 1100px) {
+    .dns-details-grid { grid-template-columns: 1fr 1fr; }
+  }
+
+  /* Подпись под таблицей чуть спокойнее */
+  .dns-note {
+    margin: 10px 0 0;
+    opacity: 0.8;
+  }
+</style>
+
+
+<script>
+  function toggleDnsDetails(id) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.style.display = (el.style.display === 'none' || el.style.display === '') ? 'table-row' : 'none';
+  }
+</script>
+
+<div class="card-header">
+  <div>
+    <p class="card-title">{{ block.name }}</p>
+    <p class="card-subtitle">{{ block.description }}</p>
+  </div>
+
+  {# Статусная плашка по сигналам #}
+  {% set st = 'ok' %}
+  {% if kpis.split_horizon_suspected == 'yes' %}
+    {% set st = 'warning' %}
+  {% endif %}
+  {{ status_pill(st) }}
+</div>
+
+<div class="card-body stack">
+
+  {# === HEADLINE === #}
+  {% if headline %}
+    <div class="card" style="margin:0; background:color-mix(in oklab, var(--surface), var(--surface-2) 25%);">
+      <div class="card-body" style="padding:14px;">
+        <p style="margin:0; font-size:16px; font-weight:700;">
+          {{ headline }}
+        </p>
+        <p class="hint" style="margin-top:6px;">
+          Рекомендация: для длинных ответов и диагностики используйте “детали” в таблице.
+        </p>
+      </div>
+    </div>
+  {% endif %}
+
+  {# === KPIs === #}
+  <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(160px,1fr)); gap:10px;">
+    <div class="card">
+      <div class="card-body">
+        <p class="hint">DNSSEC</p>
+        <p style="font-size:18px; font-weight:700;">
+          {{ 'есть' if kpis.dnssec_present == 'yes' else 'нет' }}
+        </p>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-body">
+        <p class="hint">CAA</p>
+        <p style="font-size:18px; font-weight:700;">
+          {{ 'есть' if kpis.caa_present == 'yes' else 'нет' }}
+        </p>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-body">
+        <p class="hint">Split-horizon</p>
+        <p style="font-size:18px; font-weight:700;">
+          {{ 'подозрение' if kpis.split_horizon_suspected == 'yes' else 'не выявлено' }}
+        </p>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-body">
+        <p class="hint">Min TTL</p>
+        <p style="font-size:18px; font-weight:700;">
+          {% if kpis.ttl_min is not none %}{{ kpis.ttl_min }} s{% else %}—{% endif %}
+        </p>
+      </div>
+    </div>
+  </div>
+
+  {# === INSIGHTS === #}
+  {% if insights %}
+    <div class="card" style="margin:0;">
+      <div class="card-body">
+        <p class="hint" style="margin-bottom:6px;">Выводы</p>
+        <ul style="margin:0; padding-left:18px;">
+          {% for i in insights %}
+            <li style="margin:4px 0;">{{ i }}</li>
+          {% endfor %}
+        </ul>
+      </div>
+    </div>
+  {% endif %}
+
+  {# === DNS MATRIX (компактная) === #}
+  {% if resolvers and rr_types and matrix %}
+    <div class="card" style="margin:0;">
+      <div class="card-header">
+        <p class="card-title">Снимок DNS по резолверам</p>
+      </div>
+
+      <div class="card-body" style="overflow:auto;">
+        <table class="table dns-table">
+          <thead>
+            <tr>
+              <th style="width:140px;">Резолвер</th>
+              {% for rr in rr_types %}
+                <th>{{ rr }}</th>
+              {% endfor %}
+            </tr>
+          </thead>
+
+          <tbody>
+            {% for rname in resolvers %}
+              {# Основная строка #}
+              <tr>
+                <td class="mono">{{ rname }}</td>
+
+                {% for rr in rr_types %}
+                  {% set cell = (matrix.get(rname, {}).get(rr, {})) %}
+                  {% set ok = cell.get('ok') %}
+                  {% set ttl = cell.get('ttl') %}
+                  {% set answers = cell.get('answers') or [] %}
+                  {% set err = cell.get('error') %}
+
+                  {# Определяем “N/A” для DNSSEC-типов, если DNSSEC не используется #}
+                  {% set is_dnssec_rr = (rr in ['DS', 'DNSKEY', 'RRSIG']) %}
+                  {% set dnssec_used = (kpis.dnssec_present == 'yes') %}
+                  {% set show_na = (is_dnssec_rr and not dnssec_used) %}
+
+                  {# Генерируем ID для строки деталей (уникально) #}
+                  {% set detail_id = 'dns_details_' ~ rname ~ '_' ~ rr %}
+
+                  <td class="dns-cell">
+                    <div class="dns-meta">
+                      {% if show_na %}
+                        <span class="dns-badge dns-badge-na">N/A</span>
+                      {% else %}
+                        {% if ok %}
+                          <span class="dns-badge dns-badge-ok">OK</span>
+                        {% else %}
+                          <span class="dns-badge dns-badge-fail">FAIL</span>
+                        {% endif %}
+                      {% endif %}
+
+                      {% if ttl is not none and (not show_na) %}
+                        <span class="dns-ttl">TTL {{ ttl }}</span>
+                      {% endif %}
+
+                      {% if (answers and (answers|length > 0)) or (err and not show_na) %}
+                        <button class="dns-more" type="button" onclick="toggleDnsDetails('{{ detail_id }}')">детали</button>
+                      {% endif %}
+                    </div>
+                  </td>
+                {% endfor %}
+              </tr>
+
+              {# Строки деталей (вторая строка) — выводим только если есть что показать #}
+              {% for rr in rr_types %}
+                {% set cell = (matrix.get(rname, {}).get(rr, {})) %}
+                {% set answers = cell.get('answers') or [] %}
+                {% set err = cell.get('error') %}
+                {% set is_dnssec_rr = (rr in ['DS', 'DNSKEY', 'RRSIG']) %}
+                {% set dnssec_used = (kpis.dnssec_present == 'yes') %}
+                {% set show_na = (is_dnssec_rr and not dnssec_used) %}
+                {% set detail_id = 'dns_details_' ~ rname ~ '_' ~ rr %}
+
+                {% if (answers and (answers|length > 0)) or (err and not show_na) %}
+                  <tr id="{{ detail_id }}" class="dns-details" style="display:none;">
+                    <td colspan="{{ rr_types|length + 1 }}">
+                      <div class="dns-details-box">
+                        <div class="dns-details-title">
+                          {{ rname }} · {{ rr }}
+                        </div>
+
+                        <div class="dns-details-grid">
+                          {% if answers and (answers|length > 0) %}
+                            <div>
+                              <div class="hint">Ответы</div>
+                              <div class="dns-details-mono">
+                                {% for a in answers %}
+                                  {{ a.text }}<br>
+                                {% endfor %}
+                              </div>
+                            </div>
+                          {% endif %}
+
+                          {% if err and not show_na %}
+                            <div>
+                              <div class="hint">Диагностика</div>
+                              <div class="dns-details-mono">{{ err }}</div>
+                            </div>
+                          {% endif %}
+                        </div>
+                      </div>
+                    </td>
+                  </tr>
+                {% endif %}
+              {% endfor %}
+
+            {% endfor %}
+          </tbody>
+        </table>
+
+        <p class="hint dns-note" style="margin:10px 0 0;">
+          Примечание: DS/DNSKEY/RRSIG отображаются как N/A, если DNSSEC не используется на домене.
+          При включённом DNSSEC эти поля показывают фактические ответы/диагностику.
+        </p>
+      </div>
+    </div>
+  {% endif %}
+
+  {# === TIMELINE === #}
+  {% if timeline %}
+    <div class="card" style="margin:0;">
+      <div class="card-header">
+        <p class="card-title">Последние проверки</p>
+      </div>
+      <div class="card-body">
+        <div class="stack">
+          {% for t in timeline %}
+            <div style="display:flex; gap:10px; align-items:flex-start;">
+              <span class="mono">{{ t.timestamp }}</span>
+              <div>
+                <div>{{ t.title }}</div>
+                {% if t.meta %}
+                  <div class="hint">
+                    резолверов: {{ t.meta.resolvers|length }} · типов: {{ t.meta.rr_types|length }}
+                  </div>
+                {% endif %}
+              </div>
+            </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  {% endif %}
+
+</div>

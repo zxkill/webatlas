@@ -8,22 +8,28 @@ from dataclasses import dataclass
 from datetime import datetime
 from urllib.parse import urlparse, urlunparse
 
-from sqlalchemy import Column, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Column, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Session
 
 from src.audit_modules.types import AuditContext, CheckUpdate, ModuleResult
 from src.webapp_db import Base, CheckRow, Domain, create_domain
 
+from .endpoint_map import (
+    WELL_KNOWN_DEFAULT,
+    endpoint_map_kpis,
+    endpoint_map_to_dict,
+    fetch_endpoint_map,
+)
+from .http_profile import build_canonical_profile, compare_www_non_www
+
 logger = logging.getLogger(__name__)
 
 
 def _ensure_url(scheme: str, domain: str, path: str) -> str:
-    """Собираем URL без query/fragment, чтобы не загрязнять логи/БД."""
     return urlunparse((scheme, domain, path, "", "", ""))
 
 
 def _status_bucket(http_status: int | None) -> str:
-    """Класс статуса для быстрых сводок."""
     if http_status is None:
         return "no_response"
     if 200 <= http_status <= 299:
@@ -37,6 +43,29 @@ def _status_bucket(http_status: int | None) -> str:
     if 500 <= http_status <= 599:
         return "5xx"
     return "other"
+
+
+def _headers_subset(headers: dict) -> dict[str, str]:
+    """
+    Берём минимум, который нужен для профиля/кэша.
+    """
+    if not headers:
+        return {}
+    out: dict[str, str] = {}
+    for k in (
+        "Content-Type",
+        "Cache-Control",
+        "Expires",
+        "ETag",
+        "Last-Modified",
+        "Vary",
+        "Age",
+        "Strict-Transport-Security",
+    ):
+        v = headers.get(k) or headers.get(k.lower())
+        if v:
+            out[k] = v
+    return out
 
 
 @dataclass(frozen=True)
@@ -53,25 +82,29 @@ class AttemptResult:
     redirect_cross_scheme: bool | None
     redirect_cross_domain: bool | None
     redirects: list[dict]
+    headers: dict[str, str]
 
 
 class AvailabilityModule:
-    """
-    Модуль доступности: “первый слой” аудита.
-    Делает устойчивое определение reachable/healthy/restricted/down и собирает метрики,
-    которые пригодятся всем последующим проверкам.
-    """
-
     key = "availability"
     name = "Доступность сайта"
     description = "Проверяет доступность домена по HTTP/HTTPS, метрики ответа и устойчивость результата."
     depends_on: tuple[str, ...] = ()
 
-    # Конфиг по умолчанию (можно позже вынести в config.yaml)
     MAX_ATTEMPTS = 3
     PRIMARY_ENDPOINT = "/"
     SECONDARY_ENDPOINTS = ("/robots.txt", "/favicon.ico")
     ENDPOINTS = (PRIMARY_ENDPOINT, *SECONDARY_ENDPOINTS)
+
+    # Новые “профильные” эндпоинты (диагностика)
+    PROFILE_ENDPOINTS = (
+        "/",
+        "/robots.txt",
+        "/sitemap.xml",
+        "/favicon.ico",
+        "/humans.txt",
+        *WELL_KNOWN_DEFAULT,
+    )
 
     async def run(self, context: AuditContext) -> ModuleResult:
         domain = context.domain
@@ -81,23 +114,26 @@ class AvailabilityModule:
             "checked_ts": int(time.time()),
             "schemes": {},
             "summary": {},
+            "http_profile": {},
+            "endpoints_map": {},
         }
+
         module_payload: list[dict] = []
 
-        # Итоговое решение по домену (канонический ответ — первый “полезный”)
         chosen = {
             "reachable": False,
             "healthy": False,
             "restricted": False,
             "used_scheme": None,
-            "used_path": None,
             "canonical_url": None,
             "final_host": None,
-            "set_cookie": "",
-            "headers": {},
+            "flaky": False,
         }
 
-        # Проверяем https потом http
+        # Для HTTP-профиля сохраняем “корневые” результаты по / для http и https
+        root_http: dict | None = None
+        root_https: dict | None = None
+
         for scheme in ("https", "http"):
             scheme_block = {"attempts": [], "best": None}
             evidence["schemes"][scheme] = scheme_block
@@ -107,18 +143,10 @@ class AvailabilityModule:
 
             for path in self.ENDPOINTS:
                 url = _ensure_url(scheme, domain, path)
-
-                # Ретраи на каждый endpoint
                 endpoint_attempts: list[AttemptResult] = []
 
                 for attempt_no in range(1, self.MAX_ATTEMPTS + 1):
-                    logger.info(
-                        "[availability] %s attempt=%s/%s url=%s",
-                        domain,
-                        attempt_no,
-                        self.MAX_ATTEMPTS,
-                        url,
-                    )
+                    logger.info("[availability] %s attempt=%s/%s url=%s", domain, attempt_no, self.MAX_ATTEMPTS, url)
 
                     res = await context.http.fetch_ex(
                         context.session,
@@ -141,15 +169,13 @@ class AvailabilityModule:
                             redirect_cross_scheme=None,
                             redirect_cross_domain=None,
                             redirects=[],
+                            headers={},
                         )
                     else:
                         resp = res.response
-                        content_type = resp.headers.get("Content-Type")
-                        redirects = [
-                            {"url": h.url, "status": h.status, "location": h.location}
-                            for h in resp.redirects
-                        ]
-                        # Определяем “кросс” редиректы
+                        headers = dict(resp.headers) if resp.headers else {}
+                        redirects = [{"url": h.url, "status": h.status, "location": h.location} for h in resp.redirects]
+
                         redirect_cross_scheme = False
                         redirect_cross_domain = False
                         try:
@@ -168,16 +194,16 @@ class AvailabilityModule:
                             elapsed_ms=resp.elapsed_ms,
                             ttfb_ms=resp.ttfb_ms,
                             response_bytes=resp.response_bytes,
-                            content_type=content_type,
+                            content_type=headers.get("Content-Type") or headers.get("content-type"),
                             redirect_count=len(resp.redirects),
                             redirect_cross_scheme=redirect_cross_scheme,
                             redirect_cross_domain=redirect_cross_domain,
                             redirects=redirects,
+                            headers=_headers_subset(headers),
                         )
 
                     endpoint_attempts.append(ar)
 
-                    # Запись в payload (таблица availability_checks)
                     module_payload.append(
                         {
                             "checked_ts": int(time.time()),
@@ -194,21 +220,15 @@ class AvailabilityModule:
                             "content_type": ar.content_type,
                             "redirect_count": ar.redirect_count,
                             "redirect_cross_scheme": "yes" if ar.redirect_cross_scheme else "no"
-                            if ar.redirect_cross_scheme is not None
-                            else None,
+                            if ar.redirect_cross_scheme is not None else None,
                             "redirect_cross_domain": "yes" if ar.redirect_cross_domain else "no"
-                            if ar.redirect_cross_domain is not None
-                            else None,
-                            "evidence_json": None,  # заполним ниже одним общим evidence, чтобы не раздувать
+                            if ar.redirect_cross_domain is not None else None,
+                            "evidence_json": None,
                         }
                     )
 
-                # Определяем лучший результат по endpoint
-                # Приоритет: 2xx/3xx > 401/403 > 4xx/5xx > no_response
                 def endpoint_rank(a: AttemptResult) -> int:
-                    if not a.ok:
-                        return 0
-                    if a.http_status is None:
+                    if not a.ok or a.http_status is None:
                         return 0
                     if 200 <= a.http_status <= 399:
                         return 4
@@ -220,14 +240,8 @@ class AvailabilityModule:
                         return 1
                     return 1
 
-                # Берём максимум по rank, а среди равных — минимальный elapsed
-                candidate = max(
-                    endpoint_attempts,
-                    key=lambda a: (endpoint_rank(a), -(a.elapsed_ms or 10 ** 9)),
-                )
-
-                # Оценка кандидата для выбора “канонического” ответа
-                # (не финальный score домена — только выбор лучшего ответа)
+                # max rank; among equals take lowest elapsed
+                candidate = max(endpoint_attempts, key=lambda a: (endpoint_rank(a), -(a.elapsed_ms or 10**9)))
                 cand_rank = endpoint_rank(candidate)
                 if cand_rank > best_score:
                     best_score = cand_rank
@@ -241,15 +255,23 @@ class AvailabilityModule:
                     }
                 )
 
+                # Для профиля сохраняем “корень” /
+                if path == "/" and best_attempt and best_attempt.final_url:
+                    root_payload = {
+                        "request_url": url,
+                        "final_url": best_attempt.final_url,
+                        "status": best_attempt.http_status,
+                        "redirects": best_attempt.redirects,
+                        "headers": best_attempt.headers,
+                    }
+                    if scheme == "https":
+                        root_https = root_payload
+                    else:
+                        root_http = root_payload
+
             scheme_block["best"] = best_attempt.__dict__ if best_attempt else None
 
-            # Если по схеме есть хоть какой-то ответ — считаем reachable для этой схемы
-            scheme_reachable = best_attempt is not None and (
-                    (best_attempt.ok and best_attempt.http_status is not None) or (best_attempt.reason_code is None)
-            )
-            scheme_block["reachable"] = bool(scheme_reachable)
-
-            # Если нашли хороший кандидат (2xx/3xx или restricted) — выбираем его и завершаем
+            # Выбор канонического “живого” ответа: 2xx/3xx или restricted
             if best_attempt and best_attempt.ok and best_attempt.http_status is not None:
                 if 200 <= best_attempt.http_status <= 399:
                     chosen["reachable"] = True
@@ -260,7 +282,6 @@ class AvailabilityModule:
 
                 if chosen["reachable"]:
                     chosen["used_scheme"] = scheme
-                    # path восстановим по final_url (если можно) иначе оставим None
                     chosen["canonical_url"] = best_attempt.final_url
                     try:
                         chosen["final_host"] = urlparse(best_attempt.final_url or "").netloc or None
@@ -268,13 +289,11 @@ class AvailabilityModule:
                         chosen["final_host"] = None
                     break
 
-        # --- Стабильность / Flaky ---
-        # Правило: если по выбранной схеме в рамках / есть несколько попыток и они сильно расходятся — flaky.
+        # flaky: различия статусов по / на выбранной схеме
         flaky = False
         attempts_for_flaky: list[int | None] = []
         if chosen["used_scheme"]:
             sch = evidence["schemes"].get(chosen["used_scheme"], {})
-            # Берём только endpoint "/" для флапов
             for ep in sch.get("attempts", []):
                 if ep.get("path") == "/":
                     for a in ep.get("attempts", []):
@@ -282,12 +301,11 @@ class AvailabilityModule:
         uniq = {x for x in attempts_for_flaky if x is not None}
         if len(uniq) >= 2:
             flaky = True
+        chosen["flaky"] = flaky
 
-        # --- Скоринг ---
-        # Доменный скор — отдельный от “внутреннего ранга”
+        # score/status
         score = 0
         status = "no"
-
         if chosen["healthy"]:
             status = "yes"
             score = 80
@@ -301,9 +319,7 @@ class AvailabilityModule:
             status = "no"
             score = 0
 
-        # Добавка за производительность (если есть)
-        # Берём ttfb по выбранному каноническому ответу — в evidence он есть внутри схемы, но проще:
-        # вытащим минимум ttfb среди успешных ответов на выбранной схеме.
+        # perf bonus
         perf_bonus = 0
         ttfb_candidates: list[int] = []
         if chosen["used_scheme"]:
@@ -318,14 +334,58 @@ class AvailabilityModule:
                 perf_bonus = 20
             elif ttfb < 1000:
                 perf_bonus = 10
-            else:
-                perf_bonus = 0
 
-        # Штраф за flaky
         if flaky:
             score = max(0, score - 10)
 
         score = min(100, score + perf_bonus)
+
+        # --- HTTP профиль (канонизация) ---
+        canonical = build_canonical_profile(root_http, root_https)
+        # www/non-www эвристика: сравним финальные host http/https если есть
+        www_switch = None
+        try:
+            h1 = urlparse(root_http["final_url"]).netloc if (root_http and root_http.get("final_url")) else None
+            h2 = urlparse(root_https["final_url"]).netloc if (root_https and root_https.get("final_url")) else None
+            www_switch = compare_www_non_www(h1, h2)
+        except Exception:
+            www_switch = None
+
+        evidence["http_profile"] = {
+            "canonical_url": canonical.canonical_url,
+            "canonical_scheme": canonical.canonical_scheme,
+            "canonical_host": canonical.canonical_host,
+            "www_mode": canonical.www_mode,
+            "trailing_slash_mode": canonical.trailing_slash_mode,
+            "www_non_www_detected": www_switch,
+            "http_root": root_http,
+            "https_root": root_https,
+            "hsts": {
+                "present": canonical.hsts_present,
+                "max_age": canonical.hsts_max_age,
+                "include_subdomains": canonical.hsts_includesubdomains,
+                "preload": canonical.hsts_preload,
+            },
+        }
+
+        # --- Карта эндпоинтов (диагностика) ---
+        # Используем “финальный” host если есть, чтобы карта шла по каноническому хосту.
+        map_scheme = chosen["used_scheme"] or "https"
+        map_host = chosen["final_host"] or domain
+
+        endpoints_items = await fetch_endpoint_map(
+            context=context,
+            scheme=map_scheme,
+            host=map_host,
+            paths=list(self.PROFILE_ENDPOINTS),
+        )
+
+        evidence["endpoints_map"] = {
+            "scheme": map_scheme,
+            "host": map_host,
+            "kpis": endpoint_map_kpis(endpoints_items),
+            "items": endpoint_map_to_dict(endpoints_items),
+        }
 
         evidence["summary"] = {
             "chosen": chosen,
@@ -333,12 +393,10 @@ class AvailabilityModule:
             "score": score,
         }
 
-        # Подставим единый evidence_json в каждую строку payload (чтобы не раздувать разными JSON)
         evidence_json = json.dumps(evidence, ensure_ascii=False)
         for item in module_payload:
             item["evidence_json"] = evidence_json
 
-        # Сохраняем в context данные, полезные для следующих модулей
         context.data["availability"] = {
             "reachable": chosen["reachable"],
             "healthy": chosen["healthy"],
@@ -347,27 +405,22 @@ class AvailabilityModule:
             "canonical_url": chosen["canonical_url"],
             "final_host": chosen["final_host"],
             "flaky": flaky,
+            "http_profile": evidence["http_profile"],
+            "endpoints_map": evidence["endpoints_map"],
         }
 
         return ModuleResult(
             check_updates=[
                 CheckUpdate(
                     key=self.key,
-                    description="Проверка доступности и устойчивости ответов",
-                    row=CheckRow(
-                        status=status,
-                        score=score,
-                        evidence_json=evidence_json,
-                    ),
+                    description="Проверка доступности, HTTP-профиля и базовых эндпоинтов",
+                    row=CheckRow(status=status, score=score, evidence_json=evidence_json),
                 )
             ],
             module_payload=module_payload,
         )
 
     def persist(self, session: Session, domain: str, payload: list[dict]) -> None:
-        """
-        Сохраняет результаты проверок доступности в таблицу availability_checks.
-        """
         if not payload:
             logger.debug("[availability] нет данных для сохранения: domain=%s", domain)
             return
@@ -404,23 +457,16 @@ class AvailabilityModule:
         logger.info("[availability] сохранено записей: domain=%s count=%s", domain, len(payload))
 
     def build_report_block(self, session: Session, domain: str) -> dict:
-        """
-        Backward-compatible report:
-        - entries: старый формат для текущего UI (таблица + счетчик)
-        - summary: агрегаты (как раньше)
-        - empty_message: для UI
-        - + headline/kpis/insights/checks/timeline: новый “понятный” слой для будущего UI
-        """
         domain_record = session.query(Domain).filter(Domain.domain == domain).one_or_none()
         if domain_record is None:
             return {
                 "key": self.key,
+                "template": "audit_modules/availability/availability.html",
                 "name": self.name,
                 "description": self.description,
                 "summary": {},
                 "entries": [],
                 "empty_message": "Данные о домене отсутствуют в базе.",
-                # v2
                 "headline": "Данные отсутствуют",
                 "kpis": {},
                 "insights": [],
@@ -430,6 +476,8 @@ class AvailabilityModule:
                     "attempts_per_endpoint": self.MAX_ATTEMPTS,
                 },
                 "timeline": [],
+                "http_profile": {},
+                "endpoints_map": {},
             }
 
         now_ts = int(time.time())
@@ -441,7 +489,7 @@ class AvailabilityModule:
                 session.query(AvailabilityCheck)
                 .filter(AvailabilityCheck.domain_id == domain_record.id)
                 .filter(AvailabilityCheck.checked_ts >= ts_from)
-                .filter(AvailabilityCheck.path == self.PRIMARY_ENDPOINT)  # <-- ВАЖНО
+                .filter(AvailabilityCheck.path == self.PRIMARY_ENDPOINT)
                 .order_by(AvailabilityCheck.checked_ts.desc())
                 .all()
             )
@@ -456,43 +504,30 @@ class AvailabilityModule:
                     "uptime_pct": None,
                     "median_ttfb_ms": None,
                     "median_elapsed_ms": None,
-                    "top_reason_codes": [],
                     "status_buckets": {},
                 }
 
             ok_cnt = 0
             ttfb_values: list[int] = []
             elapsed_values: list[int] = []
-            reason_counter: dict[str, int] = {}
             bucket_counter: dict[str, int] = {}
 
             for r in rows:
                 bucket = r.status_bucket or _status_bucket(r.http_status)
                 bucket_counter[bucket] = bucket_counter.get(bucket, 0) + 1
-
                 if bucket in ("2xx", "3xx", "restricted"):
                     ok_cnt += 1
-
                 if isinstance(r.ttfb_ms, int):
                     ttfb_values.append(r.ttfb_ms)
                 if isinstance(r.elapsed_ms, int):
                     elapsed_values.append(r.elapsed_ms)
 
-                if r.reason_code:
-                    reason_counter[r.reason_code] = reason_counter.get(r.reason_code, 0) + 1
-
-            def top_n(counter: dict[str, int], n: int = 5) -> list[dict]:
-                items = sorted(counter.items(), key=lambda x: x[1], reverse=True)[:n]
-                return [{"reason_code": k, "count": v} for k, v in items]
-
             uptime_pct = round(ok_cnt * 100.0 / max(1, len(rows)), 2)
-
             return {
                 "count": len(rows),
                 "uptime_pct": uptime_pct,
                 "median_ttfb_ms": int(statistics.median(ttfb_values)) if ttfb_values else None,
                 "median_elapsed_ms": int(statistics.median(elapsed_values)) if elapsed_values else None,
-                "top_reason_codes": top_n(reason_counter),
                 "status_buckets": bucket_counter,
             }
 
@@ -501,7 +536,6 @@ class AvailabilityModule:
             "last_7d": summarize(rows_7d),
         }
 
-        # ---------- Старый UI: entries ----------
         last_rows = (
             session.query(AvailabilityCheck)
             .filter(AvailabilityCheck.domain_id == domain_record.id)
@@ -544,7 +578,24 @@ class AvailabilityModule:
                 }
             )
 
-        # ---------- Новый UX-слой (v2) ----------
+        # Достаём “свежий” evidence_json из последней записи по /
+        http_profile = {}
+        endpoints_map = {}
+        try:
+            latest_root = (
+                session.query(AvailabilityCheck)
+                .filter(AvailabilityCheck.domain_id == domain_record.id)
+                .filter(AvailabilityCheck.path == "/")
+                .order_by(AvailabilityCheck.checked_ts.desc())
+                .first()
+            )
+            if latest_root and latest_root.evidence_json:
+                ev = json.loads(latest_root.evidence_json)
+                http_profile = ev.get("http_profile") or {}
+                endpoints_map = ev.get("endpoints_map") or {}
+        except Exception as e:
+            logger.warning("[availability] failed to parse evidence_json domain=%s err=%s", domain, e)
+
         s24 = summary.get("last_24h", {}) or {}
         uptime24 = s24.get("uptime_pct")
         buckets24 = s24.get("status_buckets") or {}
@@ -561,74 +612,27 @@ class AvailabilityModule:
         insights: list[str] = []
         if uptime24 is not None and uptime24 < 100:
             insights.append("За последние 24 часа ответы нестабильны (аптайм ниже 100%).")
-        if "4xx" in buckets24:
-            insights.append("Зафиксированы ошибки 4xx (возможна неверная страница/редиректы/эндпоинт).")
         if "5xx" in buckets24:
             insights.append("Зафиксированы ошибки 5xx (сбой на стороне сервера).")
         if "no_response" in buckets24:
             insights.append("Есть проверки без ответа (таймаут/DNS/TLS/соединение).")
 
-        # --- Диагностика secondary endpoints (НЕ влияет на аптайм/вердикт) ---
-        secondary_latest = (
-            session.query(AvailabilityCheck)
-            .filter(AvailabilityCheck.domain_id == domain_record.id)
-            .filter(AvailabilityCheck.path.in_(list(self.SECONDARY_ENDPOINTS)))
-            .order_by(AvailabilityCheck.checked_ts.desc())
-            .limit(200)
-            .all()
-        )
+        # HTTP-профиль: подсказки
+        if http_profile:
+            if http_profile.get("canonical_scheme") != "https":
+                insights.append("Канонический протокол не HTTPS — рекомендуется принудительно использовать HTTPS.")
+            hsts = http_profile.get("hsts") or {}
+            if http_profile.get("canonical_scheme") == "https" and not hsts.get("present"):
+                insights.append("HSTS не обнаружен — рекомендуется включить Strict-Transport-Security.")
+            if http_profile.get("www_non_www_detected") == "www_non_www":
+                insights.append("Обнаружено переключение www/non-www — проверьте единый канонический хост.")
 
-        # Возьмём по каждому secondary endpoint последний результат
-        latest_by_path: dict[str, AvailabilityCheck] = {}
-        for r in secondary_latest:
-            if r.path and r.path not in latest_by_path:
-                latest_by_path[r.path] = r
-
-        secondary_notes: list[str] = []
-        for path in self.SECONDARY_ENDPOINTS:
-            r = latest_by_path.get(path)
-            if not r:
-                continue
-
-            bucket = r.status_bucket or _status_bucket(r.http_status)
-
-            # Текст формируем максимально “человеческий”
-            if bucket == "2xx":
-                secondary_notes.append(f"{path}: доступен (HTTP {r.http_status}).")
-            elif bucket == "3xx":
-                secondary_notes.append(f"{path}: редирект (HTTP {r.http_status}).")
-            elif bucket == "restricted":
-                secondary_notes.append(
-                    f"{path}: закрыт (HTTP {r.http_status}) — ресурс существует, но требуется доступ.")
-            elif bucket == "4xx":
-                # 404 для favicon/robots — нормальная ситуация, это НЕ "недоступность сайта"
-                if r.http_status == 404:
-                    secondary_notes.append(f"{path}: отсутствует (HTTP 404) — не влияет на доступность сайта.")
-                else:
-                    secondary_notes.append(
-                        f"{path}: ошибка клиента (HTTP {r.http_status}) — проверьте маршрут/настройки.")
-            elif bucket == "5xx":
-                secondary_notes.append(
-                    f"{path}: ошибка сервера (HTTP {r.http_status}) — возможно влияет на статические ресурсы/индексацию.")
-            else:
-                # no_response / other
-                reason = f", причина: {r.reason_code}" if r.reason_code else ""
-                secondary_notes.append(f"{path}: нет ответа ({bucket}){reason}.")
-
-        # Добавляем в insights с пометкой “Диагностика”
-        if secondary_notes:
-            insights.append("Диагностика: " + " ".join(secondary_notes))
-
-        # Чуть “человечнее” таймлайн (можно потом в UI)
+        # Таймлайн — последние 10 событий
         timeline = []
         for e in entries[:10]:
             status = e["status"]
             icon = "✅" if status in ("2xx", "3xx", "restricted") else "❌" if status in ("4xx", "5xx") else "⚠️"
             meta = e.get("details", {}) or {}
-            ttfb_ms = None
-            elapsed_ms = None
-            # вытаскиваем из message без парсинга: проще использовать details позже,
-            # но сейчас уже есть row.ttfb_ms/elapsed_ms в таблице — UI может показать из details при желании.
             timeline.append(
                 {
                     "timestamp": e["timestamp"],
@@ -650,12 +654,10 @@ class AvailabilityModule:
             "name": self.name,
             "description": self.description,
 
-            # старое — для текущего UI
             "summary": summary,
             "entries": entries,
             "empty_message": empty_message,
 
-            # новое — для будущего UI
             "headline": headline,
             "kpis": {
                 "uptime_24h_pct": summary["last_24h"].get("uptime_pct"),
@@ -671,12 +673,14 @@ class AvailabilityModule:
             },
             "insights": insights,
             "timeline": timeline,
+
+            # NEW
+            "http_profile": http_profile,
+            "endpoints_map": endpoints_map,
         }
 
 
 class AvailabilityCheck(Base):
-    """Таблица результатов проверок доступности домена (расширенная)."""
-
     __tablename__ = "availability_checks"
 
     id = Column(Integer, primary_key=True)
@@ -686,25 +690,19 @@ class AvailabilityCheck(Base):
 
     scheme = Column(String(8), nullable=True)
     path = Column(String(128), nullable=True)
-
     attempt_no = Column(Integer, nullable=True)
 
-    # Упрощённая классификация статусов для отчётов/аналитики
     status_bucket = Column(String(32), nullable=True)
-
     http_status = Column(Integer, nullable=True)
     final_url = Column(Text, nullable=True)
 
-    # Нормализованный код причины при ошибке
     reason_code = Column(String(64), nullable=True)
 
-    # Метрики
     elapsed_ms = Column(Integer, nullable=True)
     ttfb_ms = Column(Integer, nullable=True)
     response_bytes = Column(Integer, nullable=True)
     content_type = Column(Text, nullable=True)
 
-    # Редиректы
     redirect_count = Column(Integer, nullable=True)
     redirect_cross_scheme = Column(String(8), nullable=True)  # yes/no
     redirect_cross_domain = Column(String(8), nullable=True)  # yes/no

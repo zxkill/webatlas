@@ -1,0 +1,185 @@
+{# src/audit_modules/ip_asn_geo/ip_asn_geo.html #}
+{% from "partials/_status.html" import status_pill %}
+
+{% set kpis = block.kpis or {} %}
+{% set insights = block.insights or [] %}
+{% set timeline = block.timeline or [] %}
+{% set table = block.table or {} %}
+{% set rows = table.rows or [] %}
+{% set rotation_details = table.rotation_details %}
+
+<div class="card-header">
+  <div>
+    <p class="card-title">{{ block.name }}</p>
+    <p class="card-subtitle">{{ block.description }}</p>
+  </div>
+
+  {# статус: mass infra или rotation -> warning #}
+  {% set st = 'ok' %}
+  {% if kpis.mass_infra == 'yes' or kpis.rotation == 'changed' %}
+    {% set st = 'warning' %}
+  {% endif %}
+  {{ status_pill(st) }}
+</div>
+
+<div class="card-body stack">
+
+  {# === HEADLINE === #}
+  {% if block.headline %}
+    <div class="card" style="margin:0; background:color-mix(in oklab, var(--surface), var(--surface-2) 25%);">
+      <div class="card-body" style="padding:14px;">
+        <p style="margin:0; font-size:16px; font-weight:700;">{{ block.headline }}</p>
+        <p class="hint" style="margin-top:6px;">
+          Источник ASN/страны: RDAP. Ротация определяется сравнением с предыдущим запуском (если есть).
+        </p>
+      </div>
+    </div>
+  {% endif %}
+
+  {# === KPIs === #}
+  <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(160px,1fr)); gap:10px;">
+    <div class="card"><div class="card-body">
+      <p class="hint">IP</p>
+      <p style="font-size:18px; font-weight:700;">{{ kpis.ip_count or 0 }}</p>
+    </div></div>
+
+    <div class="card"><div class="card-body">
+      <p class="hint">ASN</p>
+      <p style="font-size:18px; font-weight:700;">{{ kpis.asn_count or 0 }}</p>
+    </div></div>
+
+    <div class="card"><div class="card-body">
+      <p class="hint">Страны</p>
+      <p style="font-size:18px; font-weight:700;">{{ kpis.country_count or 0 }}</p>
+    </div></div>
+
+    <div class="card"><div class="card-body">
+      <p class="hint">Ротация IP</p>
+      <p style="font-size:18px; font-weight:700;">
+        {% if kpis.rotation == 'changed' %}изменения{% elif kpis.rotation == 'stable' %}стабильно{% else %}нет истории{% endif %}
+      </p>
+    </div></div>
+
+    <div class="card"><div class="card-body">
+      <p class="hint">Массовая инфраструктура</p>
+      <p style="font-size:18px; font-weight:700;">
+        {{ 'да' if kpis.mass_infra == 'yes' else 'нет' }}
+      </p>
+    </div></div>
+  </div>
+
+  {# === ROTATION DETAILS === #}
+  {% if rotation_details %}
+    <div class="card" style="margin:0;">
+      <div class="card-header"><p class="card-title">Детали ротации IP</p></div>
+      <div class="card-body">
+        <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(260px,1fr)); gap:10px;">
+          <div>
+            <p class="hint">Добавлено</p>
+            {% if rotation_details.added %}
+              {% for ip in rotation_details.added %}
+                <div class="mono">{{ ip }}</div>
+              {% endfor %}
+            {% else %}
+              <div class="hint">—</div>
+            {% endif %}
+          </div>
+          <div>
+            <p class="hint">Удалено</p>
+            {% if rotation_details.removed %}
+              {% for ip in rotation_details.removed %}
+                <div class="mono">{{ ip }}</div>
+              {% endfor %}
+            {% else %}
+              <div class="hint">—</div>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+  {% endif %}
+
+  {# === INSIGHTS === #}
+  {% if insights %}
+    <div class="card" style="margin:0;">
+      <div class="card-body">
+        <p class="hint" style="margin-bottom:6px;">Выводы</p>
+        <ul style="margin:0; padding-left:18px;">
+          {% for i in insights %}
+            <li style="margin:4px 0;">{{ i }}</li>
+          {% endfor %}
+        </ul>
+      </div>
+    </div>
+  {% endif %}
+
+  {# === TABLE === #}
+  <div class="card" style="margin:0;">
+    <div class="card-header">
+      <p class="card-title">IP / ASN / Организация / Страна</p>
+    </div>
+    <div class="card-body" style="overflow:auto;">
+      <table class="table" style="min-width:980px;">
+        <thead>
+          <tr>
+            <th style="width:160px;">IP</th>
+            <th style="width:60px;">v</th>
+            <th style="width:90px;">ASN</th>
+            <th style="width:260px;">Организация</th>
+            <th style="width:80px;">Страна</th>
+            <th style="width:120px;">Реестр</th>
+            <th>Описание ASN</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in rows %}
+            <tr>
+              <td class="mono">{{ r.ip }}</td>
+              <td>{{ r.version }}</td>
+              <td>{% if r.asn %}AS{{ r.asn }}{% else %}—{% endif %}</td>
+              <td>{{ r.org or '—' }}</td>
+              <td class="mono">{{ r.country or '—' }}</td>
+              <td class="mono">{{ r.registry or '—' }}</td>
+              <td>
+                {% if r.ok %}
+                  {{ r.asn_desc or '—' }}
+                {% else %}
+                  <span class="hint">ошибка: {{ r.error or 'unknown' }}</span>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+
+      <p class="hint" style="margin:10px 0 0;">
+        Примечание: если используется CDN/Anycast, возможно несколько IP/ASN/стран — это не обязательно проблема, но уменьшает точность определения origin.
+      </p>
+    </div>
+  </div>
+
+  {# === TIMELINE === #}
+  {% if timeline %}
+    <div class="card" style="margin:0;">
+      <div class="card-header"><p class="card-title">История</p></div>
+      <div class="card-body">
+        <div class="stack">
+          {% for t in timeline %}
+            <div style="display:flex; gap:10px; align-items:flex-start;">
+              <span class="mono">{{ t.timestamp }}</span>
+              <div>
+                <div>{{ t.title }}</div>
+                {% if t.meta %}
+                  <div class="hint">
+                    IP: {{ t.meta.ip_count }} · ротация: {{ t.meta.rotation if t.meta.rotation else '—' }}
+                  </div>
+                {% endif %}
+              </div>
+            </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  {% endif %}
+
+</div>

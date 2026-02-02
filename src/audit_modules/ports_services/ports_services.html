@@ -1,0 +1,250 @@
+{% from "partials/_status.html" import status_pill %}
+
+{% set headline = block.headline %}
+{% set kpis = block.kpis or {} %}
+{% set insights = block.insights or [] %}
+{% set timeline = block.timeline or [] %}
+{% set open_ports = block.open_ports or [] %}
+{% set entries_open = block.entries_open or [] %}
+{% set entries_closed = block.entries_closed or [] %}
+
+{# pill:
+   - ok: нет open
+   - warning: есть open
+   - critical: много open
+#}
+{% set st = 'ok' %}
+{% if kpis.open_ports|default(0) > 0 %}
+  {% set st = 'warning' %}
+{% endif %}
+{% if (kpis.open_ports|default(0) >= 8) %}
+  {% set st = 'critical' %}
+{% endif %}
+
+<div class="card-header">
+  <div>
+    <p class="card-title">{{ block.name }}</p>
+    <p class="card-subtitle">{{ block.description }}</p>
+  </div>
+
+  {{ status_pill(st) }}
+</div>
+
+<div class="card-body stack">
+
+  {# === HEADLINE === #}
+  {% if headline %}
+    <div class="card" style="margin:0; background:color-mix(in oklab, var(--surface), var(--surface-2) 25%);">
+      <div class="card-body" style="padding:14px;">
+        <p style="margin:0; font-size:16px; font-weight:700;">
+          {{ headline }}
+        </p>
+        <p class="hint" style="margin-top:6px;">
+          Сводка по проверенному профилю портов: open/closed, TLS/ALPN и краткие HTTP-заголовки (если применимо).
+        </p>
+      </div>
+    </div>
+  {% endif %}
+
+  {# === KPIs === #}
+  <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(160px,1fr)); gap:10px;">
+    <div class="card">
+      <div class="card-body">
+        <p class="hint">Проверено портов</p>
+        <p style="font-size:18px; font-weight:700;">{{ kpis.checked_ports|default("—") }}</p>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-body">
+        <p class="hint">Открыто портов</p>
+        <p style="font-size:18px; font-weight:700;">{{ kpis.open_ports|default("—") }}</p>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-body">
+        <p class="hint">TLS-портов</p>
+        <p style="font-size:18px; font-weight:700;">{{ kpis.tls_ports|default("—") }}</p>
+      </div>
+    </div>
+    {% if kpis.best_port %}
+      <div class="card">
+        <div class="card-body">
+          <p class="hint">Ключевая находка</p>
+          <p style="font-size:18px; font-weight:700;">{{ kpis.best_port }}</p>
+          <p class="hint" style="margin-top:6px;">
+            {{ kpis.best_service }}
+            {% if kpis.best_tls %} · {{ kpis.best_tls }}{% endif %}
+            {% if kpis.best_alpn %} · ALPN={{ kpis.best_alpn }}{% endif %}
+          </p>
+        </div>
+      </div>
+    {% endif %}
+  </div>
+
+  {# === OPEN PORTS TABLE (v2: only open) === #}
+  {% if open_ports %}
+    <div class="card" style="margin:0;">
+      <div class="card-header">
+        <p class="card-title">Открытые порты (сводка)</p>
+      </div>
+      <div class="card-body">
+        <div style="overflow:auto;">
+          <table class="table" style="min-width:980px;">
+            <thead>
+              <tr>
+                <th>Порт</th>
+                <th>Сервис</th>
+                <th>TLS</th>
+                <th>ALPN</th>
+                <th>TLS / Cipher</th>
+                <th>HTTP (кратко)</th>
+                <th>Баннер / HTTP статус</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for p in open_ports %}
+                <tr>
+                  <td class="mono">{{ p.port }}</td>
+                  <td>{{ p.service }}</td>
+                  <td class="mono">{{ "yes" if p.tls else "no" }}</td>
+                  <td class="mono">{{ p.alpn or "—" }}</td>
+                  <td class="mono">
+                    {% if p.tls_version %}{{ p.tls_version }}{% else %}—{% endif %}
+                    {% if p.cipher %}<span class="hint"> · {{ p.cipher }}</span>{% endif %}
+                  </td>
+
+                  <td class="mono" style="max-width:280px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                    {% if p.http_server %}S={{ p.http_server }}{% endif %}
+                    {% if p.http_powered_by %}
+                      {% if p.http_server %}<span class="hint"> · </span>{% endif %}
+                      P={{ p.http_powered_by }}
+                    {% endif %}
+                    {% if p.http_via %}
+                      <div class="hint" style="margin-top:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                        Via={{ p.http_via }}
+                      </div>
+                    {% endif %}
+                    {% if p.http_location %}
+                      <div class="hint" style="margin-top:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                        L={{ p.http_location }}
+                      </div>
+                    {% endif %}
+                    {% if not p.http_server and not p.http_powered_by and not p.http_via and not p.http_location %}
+                      —
+                    {% endif %}
+                  </td>
+
+                  <td class="mono" style="max-width:340px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                    {{ p.banner or "—" }}
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+
+        <p class="hint" style="margin-top:10px;">
+          Примечание: определение сервиса выполнено эвристически; для спорных случаев используйте ручную проверку.
+        </p>
+      </div>
+    </div>
+  {% endif %}
+
+  {# === INSIGHTS === #}
+  {% if insights %}
+    <div class="card" style="margin:0;">
+      <div class="card-body">
+        <p class="hint" style="margin-bottom:6px;">Выводы</p>
+        <ul style="margin:0; padding-left:18px;">
+          {% for i in insights %}
+            <li style="margin:4px 0;">{{ i }}</li>
+          {% endfor %}
+        </ul>
+      </div>
+    </div>
+  {% endif %}
+
+  {# === TIMELINE === #}
+  {% if timeline %}
+    <div class="card" style="margin:0;">
+      <div class="card-header">
+        <p class="card-title">Последние запуски</p>
+      </div>
+      <div class="card-body">
+        <div class="stack">
+          {% for t in timeline %}
+            <div style="display:flex; gap:10px; align-items:flex-start;">
+              <span class="mono">{{ t.timestamp }}</span>
+              <div>
+                <div>{{ t.title }}</div>
+              </div>
+            </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  {% endif %}
+
+  {# === LEGACY DETAILS: open === #}
+  {% if entries_open %}
+    <details class="card" style="margin:0;">
+      <summary class="card-header" style="cursor:pointer;">
+        <p class="card-title" style="margin:0;">Последний запуск (детали · open)</p>
+      </summary>
+      <div class="card-body">
+        <div class="stack">
+          {% for e in entries_open %}
+            <div style="display:flex; gap:10px; align-items:flex-start;">
+              <span class="mono">{{ e.timestamp }}</span>
+              <div>
+                <div>{{ e.message }}</div>
+
+                {% if e.details and (e.details.http_server or e.details.http_powered_by or e.details.http_location or e.details.http_via) %}
+                  <div class="hint">
+                    http:
+                    {% if e.details.http_server %}<span class="mono">server={{ e.details.http_server }}</span>{% endif %}
+                    {% if e.details.http_powered_by %}<span class="mono"> · powered={{ e.details.http_powered_by }}</span>{% endif %}
+                    {% if e.details.http_via %}<span class="mono"> · via={{ e.details.http_via }}</span>{% endif %}
+                    {% if e.details.http_location %}<span class="mono"> · location={{ e.details.http_location }}</span>{% endif %}
+                  </div>
+                {% endif %}
+
+                {% if e.details and e.details.banner %}
+                  <div class="hint">banner: <span class="mono">{{ e.details.banner }}</span></div>
+                {% endif %}
+                {% if e.details and e.details.error %}
+                  <div class="hint">error: <span class="mono">{{ e.details.error }}</span></div>
+                {% endif %}
+              </div>
+            </div>
+          {% endfor %}
+        </div>
+      </div>
+    </details>
+  {% endif %}
+
+  {# === LEGACY DETAILS: closed === #}
+  {% if entries_closed %}
+    <details class="card" style="margin:0;">
+      <summary class="card-header" style="cursor:pointer;">
+        <p class="card-title" style="margin:0;">Последний запуск (детали · closed)</p>
+      </summary>
+      <div class="card-body">
+        <div class="stack">
+          {% for e in entries_closed %}
+            <div style="display:flex; gap:10px; align-items:flex-start;">
+              <span class="mono">{{ e.timestamp }}</span>
+              <div>
+                <div>{{ e.message }}</div>
+                {% if e.details and e.details.error %}
+                  <div class="hint">error: <span class="mono">{{ e.details.error }}</span></div>
+                {% endif %}
+              </div>
+            </div>
+          {% endfor %}
+        </div>
+      </div>
+    </details>
+  {% endif %}
+
+</div>

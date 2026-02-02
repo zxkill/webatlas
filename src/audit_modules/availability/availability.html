@@ -5,6 +5,37 @@
 {% set kpis = block.kpis or {} %}
 {% set insights = block.insights or [] %}
 {% set timeline = block.timeline or [] %}
+{% set http_profile = block.http_profile or {} %}
+{% set endpoints_map = block.endpoints_map or {} %}
+{% set endpoints_items = endpoints_map.get("items") or [] %}
+{% set endpoints_kpis = endpoints_map.get("kpis") or {} %}
+
+<style>
+  .mono-soft {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    font-size: 12.5px;
+    opacity: 0.95;
+  }
+  .tag {
+    display:inline-flex; align-items:center; height:22px; padding:0 10px; border-radius:999px;
+    border:1px solid color-mix(in oklab, var(--border), white 10%);
+    background: color-mix(in oklab, var(--surface-2), white 4%);
+    font-size: 12px;
+    white-space: nowrap;
+  }
+  .tag-ok { color: color-mix(in oklab, #39D98A, white 12%); border-color: color-mix(in oklab, #39D98A, transparent 65%); background: color-mix(in oklab, #39D98A, transparent 88%); }
+  .tag-warn { color: color-mix(in oklab, #FFB86C, white 8%); border-color: color-mix(in oklab, #FFB86C, transparent 65%); background: color-mix(in oklab, #FFB86C, transparent 90%); }
+  .tag-bad { color: color-mix(in oklab, #FF5C7A, white 10%); border-color: color-mix(in oklab, #FF5C7A, transparent 65%); background: color-mix(in oklab, #FF5C7A, transparent 88%); }
+  .tag-na { opacity: 0.75; }
+
+  .endpoints-table { width:100%; table-layout: fixed; }
+  .endpoints-table th, .endpoints-table td { overflow:hidden; text-overflow: ellipsis; }
+  .endpoints-path { width: 210px; }
+  .endpoints-status { width: 90px; }
+  .endpoints-type { width: 180px; }
+  .endpoints-size { width: 110px; }
+  .endpoints-cache { width: 260px; }
+</style>
 
 <div class="card-header">
   <div>
@@ -24,11 +55,9 @@
   {% if headline %}
     <div class="card" style="margin:0; background:color-mix(in oklab, var(--surface), var(--surface-2) 25%);">
       <div class="card-body" style="padding:14px;">
-        <p style="margin:0; font-size:16px; font-weight:700;">
-          {{ headline }}
-        </p>
+        <p style="margin:0; font-size:16px; font-weight:700;">{{ headline }}</p>
         <p class="hint" style="margin-top:6px;">
-          Оценка основана на устойчивости ответов, кодах HTTP и времени ответа.
+          Оценка основана на устойчивости ответов, кодах HTTP и времени ответа. Профиль/карта эндпоинтов — диагностика.
         </p>
       </div>
     </div>
@@ -37,38 +66,179 @@
   {# === KPIs === #}
   <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(160px,1fr)); gap:10px;">
     {% if kpis.uptime_24h_pct is not none %}
-      <div class="card">
-        <div class="card-body">
-          <p class="hint">Аптайм (24ч)</p>
-          <p style="font-size:18px; font-weight:700;">{{ kpis.uptime_24h_pct }}%</p>
-        </div>
-      </div>
+      <div class="card"><div class="card-body"><p class="hint">Аптайм (24ч)</p><p style="font-size:18px; font-weight:700;">{{ kpis.uptime_24h_pct }}%</p></div></div>
     {% endif %}
     {% if kpis.uptime_7d_pct is not none %}
-      <div class="card">
-        <div class="card-body">
-          <p class="hint">Аптайм (7д)</p>
-          <p style="font-size:18px; font-weight:700;">{{ kpis.uptime_7d_pct }}%</p>
-        </div>
-      </div>
+      <div class="card"><div class="card-body"><p class="hint">Аптайм (7д)</p><p style="font-size:18px; font-weight:700;">{{ kpis.uptime_7d_pct }}%</p></div></div>
     {% endif %}
     {% if kpis.median_ttfb_ms is not none %}
-      <div class="card">
-        <div class="card-body">
-          <p class="hint">TTFB (медиана)</p>
-          <p style="font-size:18px; font-weight:700;">{{ kpis.median_ttfb_ms }} ms</p>
-        </div>
-      </div>
+      <div class="card"><div class="card-body"><p class="hint">TTFB (медиана)</p><p style="font-size:18px; font-weight:700;">{{ kpis.median_ttfb_ms }} ms</p></div></div>
     {% endif %}
     {% if kpis.median_elapsed_ms is not none %}
-      <div class="card">
-        <div class="card-body">
-          <p class="hint">Ответ (медиана)</p>
-          <p style="font-size:18px; font-weight:700;">{{ kpis.median_elapsed_ms }} ms</p>
-        </div>
-      </div>
+      <div class="card"><div class="card-body"><p class="hint">Ответ (медиана)</p><p style="font-size:18px; font-weight:700;">{{ kpis.median_elapsed_ms }} ms</p></div></div>
     {% endif %}
   </div>
+
+  {# === HTTP PROFILE (CANONICALIZATION) === #}
+  {% if http_profile %}
+    <div class="card" style="margin:0;">
+      <div class="card-header">
+        <p class="card-title">HTTP-профиль (канонизация)</p>
+      </div>
+      <div class="card-body stack">
+
+        <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(220px,1fr)); gap:10px;">
+          <div class="card" style="margin:0;">
+            <div class="card-body">
+              <p class="hint">Канонический URL</p>
+              <div class="mono-soft" title="{{ http_profile.get('canonical_url') }}">{{ http_profile.get('canonical_url') or '—' }}</div>
+            </div>
+          </div>
+
+          <div class="card" style="margin:0;">
+            <div class="card-body">
+              <p class="hint">Канонический host/scheme</p>
+              <div class="mono-soft">
+                {{ (http_profile.get('canonical_scheme') or '—') ~ '://' ~ (http_profile.get('canonical_host') or '—') }}
+              </div>
+              <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap;">
+                <span class="tag">{{ http_profile.get('www_mode') or '—' }}</span>
+                <span class="tag">{{ http_profile.get('trailing_slash_mode') or '—' }}</span>
+              </div>
+            </div>
+          </div>
+
+          {% set hsts = http_profile.get('hsts') or {} %}
+          <div class="card" style="margin:0;">
+            <div class="card-body">
+              <p class="hint">HSTS</p>
+              {% if hsts.get('present') %}
+                <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                  <span class="tag tag-ok">есть</span>
+                  {% if hsts.get('max_age') is not none %}<span class="tag">max-age={{ hsts.get('max_age') }}</span>{% endif %}
+                  {% if hsts.get('include_subdomains') %}<span class="tag">includeSubDomains</span>{% endif %}
+                  {% if hsts.get('preload') %}<span class="tag">preload</span>{% endif %}
+                </div>
+              {% else %}
+                <span class="tag tag-warn">нет</span>
+              {% endif %}
+              {% if http_profile.get('www_non_www_detected') %}
+                <p class="hint" style="margin-top:8px;">Выявлено переключение www/non-www (эвристика).</p>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+
+        {# Redirect chains #}
+        <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(280px,1fr)); gap:10px;">
+          {% for label, root in [('HTTPS /', http_profile.get('https_root')), ('HTTP /', http_profile.get('http_root'))] %}
+            <div class="card" style="margin:0;">
+              <div class="card-body">
+                <p class="hint">{{ label }} · цепочка редиректов</p>
+                {% if root %}
+                  {% set reds = root.get('redirects') or [] %}
+                  {% if reds %}
+                    <ol style="margin:0; padding-left:18px;">
+                      {% for r in reds %}
+                        <li class="mono-soft">
+                          {{ r.get('status') }} → {{ r.get('location') or '—' }}
+                        </li>
+                      {% endfor %}
+                    </ol>
+                  {% else %}
+                    <div class="hint">Редиректы отсутствуют.</div>
+                  {% endif %}
+                {% else %}
+                  <div class="hint">Нет данных.</div>
+                {% endif %}
+              </div>
+            </div>
+          {% endfor %}
+        </div>
+
+      </div>
+    </div>
+  {% endif %}
+
+  {# === ENDPOINTS MAP === #}
+  {% if endpoints_items %}
+    <div class="card" style="margin:0;">
+      <div class="card-header">
+        <p class="card-title">Карта базовых эндпоинтов</p>
+      </div>
+      <div class="card-body stack">
+
+        <div style="display:flex; gap:10px; flex-wrap:wrap;">
+          <span class="tag">scheme: {{ endpoints_map.get('scheme') or '—' }}</span>
+          <span class="tag">host: {{ endpoints_map.get('host') or '—' }}</span>
+          <span class="tag">2xx: {{ endpoints_kpis.get('ok2xx') or 0 }}/{{ endpoints_kpis.get('total') or 0 }}</span>
+          <span class="tag">3xx: {{ endpoints_kpis.get('redirects') or 0 }}</span>
+          <span class="tag">404: {{ endpoints_kpis.get('missing_404') or 0 }}</span>
+        </div>
+
+        <table class="table endpoints-table">
+          <thead>
+            <tr>
+              <th class="endpoints-path">Путь</th>
+              <th class="endpoints-status">Статус</th>
+              <th class="endpoints-type">Content-Type</th>
+              <th class="endpoints-size">Размер</th>
+              <th class="endpoints-cache">Кэширование</th>
+              <th>Final URL</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for it in endpoints_items %}
+              {% set st = it.get('http_status') %}
+              {% set cache = it.get('cache') or {} %}
+              <tr>
+                <td class="mono-soft" title="{{ it.get('path') }}">{{ it.get('path') }}</td>
+
+                <td>
+                  {% if st is none %}
+                    <span class="tag tag-bad">no</span>
+                  {% elif 200 <= st <= 299 %}
+                    <span class="tag tag-ok">{{ st }}</span>
+                  {% elif 300 <= st <= 399 %}
+                    <span class="tag tag-warn">{{ st }}</span>
+                  {% elif st == 404 %}
+                    <span class="tag tag-na">404</span>
+                  {% else %}
+                    <span class="tag tag-bad">{{ st }}</span>
+                  {% endif %}
+                </td>
+
+                <td class="mono-soft" title="{{ it.get('content_type') }}">{{ it.get('content_type') or '—' }}</td>
+
+                <td class="mono-soft">
+                  {% if it.get('response_bytes') is not none %}
+                    {{ it.get('response_bytes') }} B
+                  {% else %}
+                    —
+                  {% endif %}
+                </td>
+
+                <td class="mono-soft">
+                  {% set cc = cache.get('cache_control') %}
+                  {% set etag = cache.get('etag') %}
+                  {% set lm = cache.get('last_modified') %}
+                  {% if cc %}CC: {{ cc }}{% else %}CC: —{% endif %}
+                  {% if etag %}<br>ETag: {{ etag }}{% endif %}
+                  {% if lm %}<br>LM: {{ lm }}{% endif %}
+                </td>
+
+                <td class="mono-soft" title="{{ it.get('final_url') }}">{{ it.get('final_url') or '—' }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+
+        <p class="hint" style="margin:0;">
+          Примечание: карта эндпоинтов — диагностический слой. 404 для favicon/humans.txt часто допустим и не означает недоступность сайта.
+        </p>
+      </div>
+    </div>
+  {% endif %}
 
   {# === INSIGHTS === #}
   {% if insights %}
@@ -87,9 +257,7 @@
   {# === TIMELINE === #}
   {% if timeline %}
     <div class="card" style="margin:0;">
-      <div class="card-header">
-        <p class="card-title">Последние проверки</p>
-      </div>
+      <div class="card-header"><p class="card-title">Последние проверки</p></div>
       <div class="card-body">
         <div class="stack">
           {% for t in timeline %}
@@ -98,9 +266,7 @@
               <div>
                 <div>{{ t.title }}</div>
                 {% if t.meta %}
-                  <div class="hint">
-                    {{ t.meta.scheme }}{{ t.meta.path }} · попытка {{ t.meta.attempt_no }}
-                  </div>
+                  <div class="hint">{{ t.meta.scheme }}{{ t.meta.path }} · попытка {{ t.meta.attempt_no }}</div>
                 {% endif %}
               </div>
             </div>

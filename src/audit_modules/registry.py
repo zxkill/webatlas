@@ -8,6 +8,9 @@ from src.audit_modules.admin_detect.admin_detect import AdminDetectModule
 from src.audit_modules.cms_detect.module import CmsDetectModule
 from src.audit_modules.tls_certificate.tls_certificate import TlsCertificateModule
 from src.audit_modules.types import AuditModule
+from src.audit_modules.dns import DnsAuditModule
+from src.audit_modules.ip_asn_geo import IpAsnGeoAuditModule
+from src.audit_modules.ports_services.ports_services import PortsServicesModule
 
 logger = logging.getLogger(__name__)
 
@@ -15,8 +18,11 @@ logger = logging.getLogger(__name__)
 MODULES: list[AuditModule] = [
     AvailabilityModule(),
     TlsCertificateModule(),
+    DnsAuditModule(),
+    IpAsnGeoAuditModule(),
     CmsDetectModule(),
     AdminDetectModule(),
+    PortsServicesModule(),
 ]
 
 
