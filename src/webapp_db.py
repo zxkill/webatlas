@@ -21,6 +21,16 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, declarative_base, relationship, sessionmaker
 
 from src.utils.domain_import import import_domains_via_copy
+from src.cache import (
+    build_dashboard_cache_key,
+    build_domains_focus_cache_key,
+    build_report_cache_key,
+    cache_get_json,
+    cache_set_json,
+    invalidate_dashboard_cache,
+    invalidate_domain_cache,
+    invalidate_domains_focus_cache,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -252,6 +262,7 @@ def create_domain(session: Session, domain: str, source: str = "manual", *, comm
         existing.updated_at = func.now()
         if commit:
             session.commit()
+        _invalidate_domain_related_cache(normalized)
         return existing
 
     record = Domain(domain=normalized, source=source)
@@ -261,6 +272,7 @@ def create_domain(session: Session, domain: str, source: str = "manual", *, comm
     logger.info("Создан новый домен: %s", normalized)
     if commit:
         session.commit()
+    _invalidate_domain_related_cache(normalized)
     return record
 
 
@@ -286,6 +298,7 @@ def _get_or_create_domain(session: Session, domain: str, *, commit: bool = True)
     session.refresh(record)
     if commit:
         session.commit()
+    _invalidate_domain_related_cache(normalized)
     return record
 
 
@@ -373,6 +386,7 @@ def update_check(
     if commit:
         session.commit()
     logger.info("Обновлён результат проверки %s для домена %s", check_key, domain)
+    _invalidate_domain_related_cache(domain)
 
 
 def update_admin_panel(
@@ -419,6 +433,7 @@ def update_admin_panel(
     if commit:
         session.commit()
     logger.info("Обновлён статус админки %s для домена %s", panel_key, domain)
+    _invalidate_domain_related_cache(domain)
 
 
 def update_domain_cms(
@@ -465,6 +480,7 @@ def update_domain_cms(
     if commit:
         session.commit()
     logger.info("Обновлена CMS %s для домена %s", cms_key, domain)
+    _invalidate_domain_related_cache(domain)
 
 
 def update_module_run(
@@ -503,6 +519,7 @@ def update_module_run(
         domain,
         row.status,
     )
+    _invalidate_domain_related_cache(domain)
 
 
 def import_domains_from_file(session: Session, path: str, source: str = "file") -> FileImportStats:
@@ -532,6 +549,9 @@ def import_domains_from_file(session: Session, path: str, source: str = "file") 
         stats.inserted_domains,
         stats.skipped_duplicates,
     )
+    # Массовый импорт влияет на виджеты и списки доменов, поэтому сбрасываем агрегаты.
+    invalidate_dashboard_cache()
+    invalidate_domains_focus_cache()
     return stats
 
 
@@ -539,6 +559,12 @@ def get_domain_report(session: Session, domain: str) -> Optional[dict]:
     """Формирует агрегированный отчёт по домену для админки."""
 
     normalized = domain.strip().lower()
+    cache_key = build_report_cache_key(normalized)
+    cached_report = cache_get_json(cache_key)
+    if cached_report is not None:
+        logger.info("Отчёт по домену взят из кэша: %s", normalized)
+        return cached_report
+
     record = session.query(Domain).filter(Domain.domain == normalized).one_or_none()
     if record is None:
         logger.warning("Запрошен отчёт по домену, который не найден: %s", normalized)
@@ -612,6 +638,7 @@ def get_domain_report(session: Session, domain: str) -> Optional[dict]:
         "module_runs": module_runs_payload,
         "module_blocks": module_blocks,
     }
+    cache_set_json(cache_key, report)
     logger.info("Сформирован отчёт по домену: %s", normalized)
     return report
 
@@ -767,6 +794,19 @@ def _format_domain_row(domain: Domain, *, note: str | None = None, badge: str | 
     }
 
 
+def _invalidate_domain_related_cache(domain: str) -> None:
+    """
+    Сбрасывает кэш, который зависит от конкретного домена и агрегатов.
+
+    Вызываем после любых изменений данных, чтобы dashboard/фокусы не отдавали устаревшие данные.
+    """
+
+    logger.info("[cache] invalidate domain related cache: domain=%s", domain)
+    invalidate_domain_cache(domain)
+    invalidate_dashboard_cache()
+    invalidate_domains_focus_cache()
+
+
 def get_dashboard_data(session: Session, *, top_n: int = 5, tls_soon_days: int = 14) -> dict:
     """
     Формирует данные для главного Dashboard.
@@ -784,6 +824,12 @@ def get_dashboard_data(session: Session, *, top_n: int = 5, tls_soon_days: int =
     """
 
     logger.info("[dashboard] build payload: top_n=%s tls_soon_days=%s", top_n, tls_soon_days)
+
+    cache_key = build_dashboard_cache_key(top_n=top_n, tls_soon_days=tls_soon_days)
+    cached_payload = cache_get_json(cache_key)
+    if cached_payload is not None:
+        logger.info("[dashboard] payload from cache: key=%s", cache_key)
+        return cached_payload
 
     total_domains = session.query(func.count(Domain.id)).scalar() or 0
 
@@ -910,6 +956,7 @@ def get_dashboard_data(session: Session, *, top_n: int = 5, tls_soon_days: int =
         len(critical_events),
         len(tls_soon),
     )
+    cache_set_json(cache_key, result)
     return result
 
 
@@ -929,6 +976,16 @@ def get_domains_focus_data(
 
     allowed_focus = {"critical", "tls_soon", "recent_audits"}
     normalized_focus = focus if focus in allowed_focus else None
+    cache_key = build_domains_focus_cache_key(
+        focus=normalized_focus,
+        limit=limit,
+        top_n=top_n,
+        tls_soon_days=tls_soon_days,
+    )
+    cached_payload = cache_get_json(cache_key)
+    if cached_payload is not None:
+        logger.info("[domains] focus payload from cache: key=%s", cache_key)
+        return cached_payload
     logger.info(
         "[domains] build focus payload: focus=%s limit=%s top_n=%s tls_soon_days=%s",
         normalized_focus,
@@ -942,7 +999,9 @@ def get_domains_focus_data(
         domains_rows = list_domains(session, limit)
         payload = [_format_domain_row(domain) for domain in domains_rows]
         logger.debug("[domains] focus not set, rows=%s", len(payload))
-        return {"domains": payload, "focus": None}
+        result = {"domains": payload, "focus": None}
+        cache_set_json(cache_key, result)
+        return result
 
     # Загружаем последние запуски модулей для построения "актуальных" списков.
     recent_limit = max(top_n * 20, 200)
@@ -1026,4 +1085,6 @@ def get_domains_focus_data(
         len(focus_items),
         recent_limit,
     )
-    return {"domains": focus_items, "focus": focus_payload}
+    result = {"domains": focus_items, "focus": focus_payload}
+    cache_set_json(cache_key, result)
+    return result
