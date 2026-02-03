@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+{% from "partials/_modules.html" import modules_picker %}
+
+{% block content %}
+<div class="grid">
+
+    <div class="card">
+        <div class="card-header">
+            <div>
+                <p class="card-title">Домены</p>
+                <p class="card-subtitle">Список доменов из базы. Используйте фильтр.</p>
+            </div>
+            <span class="pill"><span class="dot"></span>{{ domains|length }} записей</span>
+        </div>
+
+        <div class="card-body stack">
+            <div class="row">
+                <div>
+                    <label class="small" for="domainFilter">Фильтр по домену</label>
+                    <input id="domainFilter" type="text" placeholder="example.com" autocomplete="off"/>
+                </div>
+
+                <form method="get" action="/report">
+                    <label class="small" for="reportDomain">Перейти к отчёту</label>
+                    <div class="row" style="grid-template-columns: 1fr auto; margin:0;">
+                        <input id="reportDomain" type="text" name="domain" placeholder="example.com" required/>
+                        <button class="btn" type="submit">Открыть</button>
+                    </div>
+                </form>
+            </div>
+
+            <div class="table-wrap">
+                <table id="domainsTable">
+                    <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Домен</th>
+                        <th>Источник</th>
+                        <th>Отчёт</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    {% if domains %}
+                    {% for d in domains %}
+                    <tr data-domain="{{ d.domain|lower }}">
+                        <td class="mono">{{ d.id }}</td>
+                        <td class="mono">{{ d.domain }}</td>
+                        <td>{{ d.source }}</td>
+                        <td><a href="/report/{{ d.domain }}">Открыть</a></td>
+                    </tr>
+                    {% endfor %}
+                    {% else %}
+                    <tr>
+                        <td colspan="4">Данных пока нет</td>
+                    </tr>
+                    {% endif %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div class="stack">
+
+        <div class="card">
+            <div class="card-header">
+                <div>
+                    <p class="card-title">Добавить домен</p>
+                    <p class="card-subtitle">Поставить домен в очередь.</p>
+                </div>
+            </div>
+            <div class="card-body">
+                <form method="post" action="/enqueue" class="stack">
+                    <div>
+                        <label class="small" for="addDomain">Домен</label>
+                        <input id="addDomain" type="text" name="domain" placeholder="example.com" required/>
+                        <p class="hint">Будет отправлено в Celery с источником <span class="mono">ui</span>.</p>
+                    </div>
+                    <button class="btn primary" type="submit">Поставить в очередь</button>
+                </form>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header">
+                <div>
+                    <p class="card-title">Администрирование</p>
+                    <p class="card-subtitle">Импорт и запуск аудита (асинхронно).</p>
+                </div>
+            </div>
+
+            <div class="card-body stack">
+
+                <details>
+                    <summary>Аудит всех доменов <span class="pill"><span class="dot"></span>Celery</span></summary>
+                    <div class="details-body stack">
+                        <form id="auditAllForm" method="post" action="/admin/audit-all" class="stack">
+                            {{ modules_picker("audit-all", modules) }}
+                            <button class="btn primary" type="submit">Запустить аудит</button>
+                        </form>
+                    </div>
+                </details>
+
+                <details>
+                    <summary>Аудит с лимитом <span class="pill"><span class="dot"></span>Celery</span></summary>
+                    <div class="details-body stack">
+                        <form id="auditLimitForm" method="post" action="/admin/audit-limit" class="stack">
+                            <div>
+                                <label class="small" for="limitN">Лимит</label>
+                                <input id="limitN" type="number" name="limit" min="1" value="50" required/>
+                            </div>
+
+                            {{ modules_picker("audit-limit", modules) }}
+
+                            <button class="btn primary" type="submit">Запустить аудит</button>
+                        </form>
+                    </div>
+                </details>
+
+                <details>
+                    <summary>Аудит конкретного домена <span class="pill"><span class="dot"></span>Celery</span>
+                    </summary>
+                    <div class="details-body stack">
+                        <form id="auditDomainForm" method="post" action="/admin/audit-domain" class="stack">
+                            <div>
+                                <label class="small" for="auditDomain">Домен</label>
+                                <input id="auditDomain" type="text" name="domain" placeholder="example.com" required/>
+                            </div>
+
+                            {{ modules_picker("audit-domain", modules) }}
+
+                            <button class="btn primary" type="submit">Запустить аудит домена</button>
+                        </form>
+                    </div>
+                </details>
+
+            </div>
+        </div>
+
+    </div>
+</div>
+{% endblock %}

@@ -7,20 +7,48 @@ from src.audit_modules.registry import list_modules
 from ..deps import get_session
 from ..services.domains import list_domains_svc, get_domain_report_svc
 
+# Новый импорт (добавим функцию ниже в webapp_db.py)
+from src.webapp_db import get_dashboard_data
+
 router = APIRouter()
 
 
 @router.get("/", response_class=HTMLResponse)
-def index(request: Request, session=Depends(get_session)) -> HTMLResponse:
-    settings = request.app.state.settings
-    domains = list_domains_svc(session)
+def dashboard(request: Request, session=Depends(get_session)) -> HTMLResponse:
+    """
+    Новый главный экран (Dashboard).
+
+    Здесь показываем агрегаты и top-списки.
+    Полные таблицы и управление — в /domains и /report.
+    """
     templates = request.app.state.templates
+
+    dashboard_payload = get_dashboard_data(session, top_n=5, tls_soon_days=14)
 
     return templates.TemplateResponse(
         "index.html",
         {
             "request": request,
-            "domains": domains,
+            "modules": list_modules(),
+            "dashboard": dashboard_payload,
+            "page": {"title": "WebAtlas — dashboard", "subtitle": "Ситуационный центр"},
+        },
+    )
+
+
+@router.get("/domains", response_class=HTMLResponse)
+def domains(request: Request, session=Depends(get_session)) -> HTMLResponse:
+    """
+    Старый экран со списком доменов перенесён на /domains.
+    """
+    templates = request.app.state.templates
+    domains_rows = list_domains_svc(session)
+
+    return templates.TemplateResponse(
+        "domains.html",
+        {
+            "request": request,
+            "domains": domains_rows,
             "modules": list_modules(),
             "page": {"title": "WebAtlas — домены", "subtitle": "Домены и действия"},
         },

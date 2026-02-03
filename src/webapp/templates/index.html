@@ -2,141 +2,278 @@
 {% from "partials/_modules.html" import modules_picker %}
 
 {% block content %}
-<div class="grid">
+<div class="dash">
 
-    <div class="card">
-        <div class="card-header">
-            <div>
-                <p class="card-title">Домены</p>
-                <p class="card-subtitle">Список доменов из базы. Используйте фильтр.</p>
+    <!-- KPI row -->
+    <div class="kpi-grid">
+        <a class="kpi card" href="/domains" title="Открыть список доменов">
+            <div class="kpi-top">
+                <div class="kpi-title">Домены</div>
             </div>
-            <span class="pill"><span class="dot"></span>{{ domains|length }} записей</span>
-        </div>
+            <div class="kpi-value mono">{{ dashboard.kpis.total_domains }}</div>
+            <div class="kpi-sub">в базе</div>
+        </a>
 
-        <div class="card-body stack">
-            <div class="row">
-                <div>
-                    <label class="small" for="domainFilter">Фильтр по домену</label>
-                    <input id="domainFilter" type="text" placeholder="example.com" autocomplete="off"/>
-                </div>
-
-                <form method="get" action="/report">
-                    <label class="small" for="reportDomain">Перейти к отчёту</label>
-                    <div class="row" style="grid-template-columns: 1fr auto; margin:0;">
-                        <input id="reportDomain" type="text" name="domain" placeholder="example.com" required/>
-                        <button class="btn" type="submit">Открыть</button>
-                    </div>
-                </form>
+        <a class="kpi card" href="/domains?focus=critical" title="Открыть критичные домены (скоро)">
+            <div class="kpi-top">
+                <div class="kpi-title">Критично</div>
+                <span class="pill bad"><span class="dot"></span>now</span>
             </div>
+            <div class="kpi-value mono">{{ dashboard.kpis.critical_count }}</div>
+            <div class="kpi-sub">требует внимания</div>
+        </a>
 
-            <div class="table-wrap">
-                <table id="domainsTable">
-                    <thead>
-                    <tr>
-                        <th>ID</th>
-                        <th>Домен</th>
-                        <th>Источник</th>
-                        <th>Отчёт</th>
-                    </tr>
-                    </thead>
-                    <tbody>
-                    {% if domains %}
-                    {% for d in domains %}
-                    <tr data-domain="{{ d.domain|lower }}">
-                        <td class="mono">{{ d.id }}</td>
-                        <td class="mono">{{ d.domain }}</td>
-                        <td>{{ d.source }}</td>
-                        <td><a href="/report/{{ d.domain }}">Открыть</a></td>
-                    </tr>
-                    {% endfor %}
-                    {% else %}
-                    <tr>
-                        <td colspan="4">Данных пока нет</td>
-                    </tr>
-                    {% endif %}
-                    </tbody>
-                </table>
+        <a class="kpi card" href="/domains?focus=tls_soon" title="TLS скоро истекает (при наличии данных)">
+            <div class="kpi-top">
+                <div class="kpi-title">TLS ≤ {{ dashboard.thresholds.tls_soon_days }} дн.</div>
+                <span class="pill warn"><span class="dot"></span>risk</span>
             </div>
-        </div>
+            <div class="kpi-value mono">{{ dashboard.kpis.tls_soon_count }}</div>
+            <div class="kpi-sub">истекает скоро</div>
+        </a>
+
+        <a class="kpi card" href="/domains?focus=recent_audits" title="Последняя активность аудита">
+            <div class="kpi-top">
+                <div class="kpi-title">Аудиты 24ч</div>
+                <span class="pill"><span class="dot"></span>ops</span>
+            </div>
+            <div class="kpi-value mono">{{ dashboard.kpis.audits_24h }}</div>
+            <div class="kpi-sub">запусков модулей</div>
+        </a>
     </div>
 
-    <div class="stack">
+    <div class="grid dash-grid">
 
-        <div class="card">
-            <div class="card-header">
-                <div>
-                    <p class="card-title">Добавить домен</p>
-                    <p class="card-subtitle">Поставить домен в очередь.</p>
-                </div>
-            </div>
-            <div class="card-body">
-                <form method="post" action="/enqueue" class="stack">
+        <!-- LEFT: signals -->
+        <div class="stack">
+
+            <div class="card">
+                <div class="card-header">
                     <div>
-                        <label class="small" for="addDomain">Домен</label>
-                        <input id="addDomain" type="text" name="domain" placeholder="example.com" required/>
-                        <p class="hint">Будет отправлено в Celery с источником <span class="mono">ui</span>.</p>
+                        <p class="card-title">Риски и события</p>
+                        <p class="card-subtitle">Только сигналы, которые помогают принимать решения.</p>
                     </div>
-                    <button class="btn primary" type="submit">Поставить в очередь</button>
-                </form>
-            </div>
-        </div>
+                    <span class="pill"><span class="dot"></span>top {{ dashboard.limits.top_n }}</span>
+                </div>
 
-        <div class="card">
-            <div class="card-header">
-                <div>
-                    <p class="card-title">Администрирование</p>
-                    <p class="card-subtitle">Импорт и запуск аудита (асинхронно).</p>
+                <div class="card-body stack">
+
+                    <div class="dash-block">
+                        <div class="dash-block-head">
+                            <div class="dash-block-title">TLS истекает</div>
+                            <div class="dash-block-meta">срок ≤ {{ dashboard.thresholds.tls_soon_days }} дней</div>
+                        </div>
+
+                        <div class="dash-list">
+                            {% if dashboard.tls_soon %}
+                                {% for item in dashboard.tls_soon %}
+                                    <a class="dash-item" href="/report/{{ item.domain }}">
+                                        <div class="dash-item-main">
+                                            <div class="dash-item-title mono">{{ item.domain }}</div>
+                                            <div class="dash-item-sub">{{ item.note }}</div>
+                                        </div>
+                                        <div class="dash-item-right">
+                                            {{ item.badge|safe }}
+                                        </div>
+                                    </a>
+                                {% endfor %}
+                            {% else %}
+                                <div class="dash-empty">{{ dashboard.empty.tls_soon }}</div>
+                            {% endif %}
+                        </div>
+                    </div>
+
+                    <div class="dash-block">
+                        <div class="dash-block-head">
+                            <div class="dash-block-title">Критические события</div>
+                            <div class="dash-block-meta">последние ошибки модулей</div>
+                        </div>
+
+                        <div class="dash-list">
+                            {% if dashboard.critical_events %}
+                                {% for item in dashboard.critical_events %}
+                                    <a class="dash-item" href="/report/{{ item.domain }}">
+                                        <div class="dash-item-main">
+                                            <div class="dash-item-title mono">{{ item.domain }}</div>
+                                            <div class="dash-item-sub">{{ item.note }}</div>
+                                        </div>
+                                        <div class="dash-item-right">
+                                            {{ item.badge|safe }}
+                                        </div>
+                                    </a>
+                                {% endfor %}
+                            {% else %}
+                                <div class="dash-empty">{{ dashboard.empty.critical_events }}</div>
+                            {% endif %}
+                        </div>
+                    </div>
+
                 </div>
             </div>
 
-            <div class="card-body stack">
-
-                <details>
-                    <summary>Аудит всех доменов <span class="pill"><span class="dot"></span>Celery</span></summary>
-                    <div class="details-body stack">
-                        <form id="auditAllForm" method="post" action="/admin/audit-all" class="stack">
-                            {{ modules_picker("audit-all", modules) }}
-                            <button class="btn primary" type="submit">Запустить аудит</button>
-                        </form>
-                    </div>
-                </details>
-
-                <details>
-                    <summary>Аудит с лимитом <span class="pill"><span class="dot"></span>Celery</span></summary>
-                    <div class="details-body stack">
-                        <form id="auditLimitForm" method="post" action="/admin/audit-limit" class="stack">
-                            <div>
-                                <label class="small" for="limitN">Лимит</label>
-                                <input id="limitN" type="number" name="limit" min="1" value="50" required/>
-                            </div>
-
-                            {{ modules_picker("audit-limit", modules) }}
-
-                            <button class="btn primary" type="submit">Запустить аудит</button>
-                        </form>
-                    </div>
-                </details>
-
-                <details>
-                    <summary>Аудит конкретного домена <span class="pill"><span class="dot"></span>Celery</span>
-                    </summary>
-                    <div class="details-body stack">
-                        <form id="auditDomainForm" method="post" action="/admin/audit-domain" class="stack">
-                            <div>
-                                <label class="small" for="auditDomain">Домен</label>
-                                <input id="auditDomain" type="text" name="domain" placeholder="example.com" required/>
-                            </div>
-
-                            {{ modules_picker("audit-domain", modules) }}
-
-                            <button class="btn primary" type="submit">Запустить аудит домена</button>
-                        </form>
-                    </div>
-                </details>
-
-            </div>
         </div>
 
+        <!-- RIGHT: activity + actions -->
+        <div class="stack">
+
+            <div class="card">
+                <div class="card-header">
+                    <div>
+                        <p class="card-title">Жизнь системы</p>
+                        <p class="card-subtitle">Активность по доменам и очередям.</p>
+                    </div>
+                </div>
+
+                <div class="card-body stack">
+
+                    <div class="dash-block compact">
+                        <div class="dash-block-head">
+                            <div class="dash-block-title">Последние аудиты</div>
+                            <div class="dash-block-meta">по запускам модулей</div>
+                        </div>
+
+                        <div class="dash-list">
+                            {% if dashboard.recent_audits %}
+                                {% for item in dashboard.recent_audits %}
+                                    <a class="dash-item" href="/report/{{ item.domain }}">
+                                        <div class="dash-item-main">
+                                            <div class="dash-item-title mono">{{ item.domain }}</div>
+                                            <div class="dash-item-sub">{{ item.note }}</div>
+                                        </div>
+                                        <div class="dash-item-right">
+                                            {{ item.badge|safe }}
+                                        </div>
+                                    </a>
+                                {% endfor %}
+                            {% else %}
+                                <div class="dash-empty">{{ dashboard.empty.recent_audits }}</div>
+                            {% endif %}
+                        </div>
+                    </div>
+
+                    <div class="dash-block compact">
+                        <div class="dash-block-head">
+                            <div class="dash-block-title">Добавлены недавно</div>
+                            <div class="dash-block-meta">последние домены в базе</div>
+                        </div>
+
+                        <div class="dash-list">
+                            {% if dashboard.recent_domains %}
+                                {% for item in dashboard.recent_domains %}
+                                    <a class="dash-item" href="/report/{{ item.domain }}">
+                                        <div class="dash-item-main">
+                                            <div class="dash-item-title mono">{{ item.domain }}</div>
+                                            <div class="dash-item-sub">{{ item.note }}</div>
+                                        </div>
+                                        <div class="dash-item-right">
+                                            <span class="pill"><span class="dot"></span>new</span>
+                                        </div>
+                                    </a>
+                                {% endfor %}
+                            {% else %}
+                                <div class="dash-empty">{{ dashboard.empty.recent_domains }}</div>
+                            {% endif %}
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+
+            <!-- ACTIONS: keep controls, but compact -->
+            <div class="card">
+                <div class="card-header">
+                    <div>
+                        <p class="card-title">Управление</p>
+                        <p class="card-subtitle">Действия вынесены в компактные секции.</p>
+                    </div>
+                </div>
+
+                <div class="card-body stack">
+
+                    <details open>
+                        <summary>Добавить домен <span class="pill"><span class="dot"></span>enqueue</span></summary>
+                        <div class="details-body stack">
+                            <form method="post" action="/enqueue" class="stack">
+                                <div>
+                                    <label class="small" for="addDomain">Домен</label>
+                                    <input id="addDomain" type="text" name="domain" placeholder="example.com" required/>
+                                    <p class="hint">Будет отправлено в Celery с источником <span class="mono">ui</span>.</p>
+                                </div>
+                                <button class="btn primary" type="submit">Поставить в очередь</button>
+                            </form>
+                        </div>
+                    </details>
+
+                    <details>
+                        <summary>Перейти к отчёту <span class="pill"><span class="dot"></span>report</span></summary>
+                        <div class="details-body stack">
+                            <form method="get" action="/report" class="stack">
+                                <div class="row" style="grid-template-columns: 1fr auto; margin:0;">
+                                    <div>
+                                        <label class="small" for="reportDomain">Домен</label>
+                                        <input id="reportDomain" type="text" name="domain" placeholder="example.com" required/>
+                                    </div>
+                                    <button class="btn" type="submit">Открыть</button>
+                                </div>
+                            </form>
+                        </div>
+                    </details>
+
+                    <details>
+                        <summary>Запуск аудита <span class="pill"><span class="dot"></span>Celery</span></summary>
+                        <div class="details-body stack">
+
+                            <details>
+                                <summary>Аудит всех доменов</summary>
+                                <div class="details-body stack">
+                                    <form id="auditAllForm" method="post" action="/admin/audit-all" class="stack">
+                                        {{ modules_picker("audit-all", modules) }}
+                                        <button class="btn primary" type="submit">Запустить аудит</button>
+                                    </form>
+                                </div>
+                            </details>
+
+                            <details>
+                                <summary>Аудит с лимитом</summary>
+                                <div class="details-body stack">
+                                    <form id="auditLimitForm" method="post" action="/admin/audit-limit" class="stack">
+                                        <div>
+                                            <label class="small" for="limitN">Лимит</label>
+                                            <input id="limitN" type="number" name="limit" min="1" value="50" required/>
+                                        </div>
+                                        {{ modules_picker("audit-limit", modules) }}
+                                        <button class="btn primary" type="submit">Запустить аудит</button>
+                                    </form>
+                                </div>
+                            </details>
+
+                            <details>
+                                <summary>Аудит конкретного домена</summary>
+                                <div class="details-body stack">
+                                    <form id="auditDomainForm" method="post" action="/admin/audit-domain" class="stack">
+                                        <div>
+                                            <label class="small" for="auditDomain">Домен</label>
+                                            <input id="auditDomain" type="text" name="domain" placeholder="example.com" required/>
+                                        </div>
+                                        {{ modules_picker("audit-domain", modules) }}
+                                        <button class="btn primary" type="submit">Запустить аудит домена</button>
+                                    </form>
+                                </div>
+                            </details>
+
+                        </div>
+                    </details>
+
+                    <a class="btn ghost" href="/domains">Открыть список доменов</a>
+                </div>
+            </div>
+
+        </div>
     </div>
+
+    <p class="footer-note">
+        Совет: главный экран показывает только агрегаты и top-списки. Детальная работа — в отчётах и списке доменов.
+    </p>
+
 </div>
 {% endblock %}

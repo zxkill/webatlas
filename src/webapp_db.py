@@ -632,3 +632,231 @@ def iter_domains(session: Session, limit: int | None = None, batch_size: int = 1
 
     for (domain,) in query:
         yield domain
+
+# --- Dashboard helpers ---------------------------------------------------------
+
+import json
+from datetime import datetime, timezone
+
+
+def _pill_html(status: str) -> str:
+    """
+    Возвращает маленький HTML-бейдж в стиле текущих pill.
+    Не используем Jinja-макрос, потому что здесь нужно компактно формировать разные лейблы.
+    """
+    s = (status or "").lower().strip()
+    if s in {"ok", "passed", "success"}:
+        cls = "ok"
+    elif s in {"warn", "warning", "maybe"}:
+        cls = "warn"
+    elif s in {"critical", "bad", "fail", "failed", "error"}:
+        cls = "bad"
+    else:
+        cls = ""
+    return f'<span class="pill {cls}"><span class="dot"></span>{status}</span>'
+
+
+def _fmt_ago(ts: int | None) -> str:
+    if not ts:
+        return "нет данных"
+    dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+    now = datetime.now(timezone.utc)
+    sec = int((now - dt).total_seconds())
+    if sec < 60:
+        return f"{sec} сек назад"
+    if sec < 3600:
+        return f"{sec // 60} мин назад"
+    if sec < 86400:
+        return f"{sec // 3600} ч назад"
+    return f"{sec // 86400} дн назад"
+
+
+def _safe_json(detail_json: str) -> dict:
+    try:
+        return json.loads(detail_json or "{}")
+    except Exception:
+        return {}
+
+
+def get_dashboard_data(session: Session, *, top_n: int = 5, tls_soon_days: int = 14) -> dict:
+    """
+    Формирует данные для главного Dashboard.
+
+    Источники данных (гарантированно есть сейчас):
+    - domains (последние добавленные)
+    - module_runs (последние запуски модулей + ошибки)
+
+    TLS истечение:
+    - best-effort: пытаемся извлечь из ModuleRun.detail_json поля:
+      not_after_ts / expires_at_ts / days_left / not_after (ISO) / expires_at (ISO)
+    - если данных нет, блок будет пустым с понятным empty_message
+
+    Важно: топ-списки ограничены top_n, чтобы главная оставалась лёгкой и компактной.
+    """
+
+    logger.info("[dashboard] build payload: top_n=%s tls_soon_days=%s", top_n, tls_soon_days)
+
+    total_domains = session.query(func.count(Domain.id)).scalar() or 0
+
+    # Последние домены
+    recent_domains_rows = (
+        session.query(Domain)
+        .order_by(Domain.id.desc())
+        .limit(top_n)
+        .all()
+    )
+    recent_domains = [
+        {"domain": d.domain, "note": f"ID {d.id} · {d.source}"}
+        for d in recent_domains_rows
+    ]
+
+    # Аудиты за 24 часа (по module_runs)
+    now_ts = int(time.time())
+    ts_24h = now_ts - 24 * 3600
+    audits_24h = (
+        session.query(func.count(ModuleRun.id))
+        .filter(ModuleRun.started_ts >= ts_24h)
+        .scalar()
+        or 0
+    )
+
+    # Последние запуски модулей
+    recent_runs = (
+        session.query(ModuleRun, Domain.domain)
+        .join(Domain, Domain.id == ModuleRun.domain_id)
+        .order_by(ModuleRun.id.desc())
+        .limit(50)  # берём больше, чтобы потом отфильтровать и выбрать top_n уникальных доменов
+        .all()
+    )
+
+    # Критические события: ошибки/failed
+    critical_events = []
+    seen_domains = set()
+
+    for run, domain_name in recent_runs:
+        st = (run.status or "").lower()
+        if st in {"failed", "fail", "error", "critical", "bad"} or (run.error_message):
+            if domain_name in seen_domains:
+                continue
+            seen_domains.add(domain_name)
+
+            note = run.error_message or f"{run.module_name} · {run.module_key}"
+            badge = _pill_html(run.status)
+            critical_events.append({"domain": domain_name, "note": note, "badge": badge})
+            if len(critical_events) >= top_n:
+                break
+
+    # Последние аудиты: отображаем последние успешные/любые по уникальным доменам
+    recent_audits = []
+    seen_domains = set()
+    for run, domain_name in recent_runs:
+        if domain_name in seen_domains:
+            continue
+        seen_domains.add(domain_name)
+
+        note = f"{run.module_name} · {_fmt_ago(run.finished_ts)}"
+        badge = _pill_html(run.status)
+        recent_audits.append({"domain": domain_name, "note": note, "badge": badge})
+        if len(recent_audits) >= top_n:
+            break
+
+    # TLS soon: best-effort parsing
+    tls_soon = []
+    tls_soon_count = 0
+    seen_domains = set()
+
+    # Соберём кандидаты по module_key, содержащему "tls"
+    tls_candidates = []
+    for run, domain_name in recent_runs:
+        mk = (run.module_key or "").lower()
+        if "tls" not in mk:
+            continue
+        tls_candidates.append((run, domain_name))
+
+    def _extract_tls_days_left(payload: dict) -> int | None:
+        # наиболее частые варианты
+        if isinstance(payload.get("days_left"), int):
+            return payload["days_left"]
+        if isinstance(payload.get("days_left"), str) and payload["days_left"].isdigit():
+            return int(payload["days_left"])
+
+        # timestamps
+        for k in ("not_after_ts", "expires_at_ts"):
+            ts = payload.get(k)
+            if isinstance(ts, int) and ts > 0:
+                return int((ts - now_ts) / 86400)
+
+        # ISO даты
+        for k in ("not_after", "expires_at"):
+            v = payload.get(k)
+            if isinstance(v, str) and v:
+                try:
+                    # допускаем формат без timezone; считаем UTC
+                    dt = datetime.fromisoformat(v.replace("Z", "+00:00"))
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    return int((dt.timestamp() - now_ts) / 86400)
+                except Exception:
+                    continue
+        return None
+
+    for run, domain_name in tls_candidates:
+        if domain_name in seen_domains:
+            continue
+        seen_domains.add(domain_name)
+
+        payload = _safe_json(run.detail_json)
+        days_left = _extract_tls_days_left(payload)
+        if days_left is None:
+            continue
+
+        tls_soon_count += 1
+        if days_left <= tls_soon_days:
+            if days_left < 0:
+                badge = '<span class="pill bad"><span class="dot"></span>expired</span>'
+                note = f"истёк {abs(days_left)} дн назад"
+            elif days_left <= 3:
+                badge = '<span class="pill bad"><span class="dot"></span>⚠</span>'
+                note = f"осталось {days_left} дн"
+            else:
+                badge = '<span class="pill warn"><span class="dot"></span>soon</span>'
+                note = f"осталось {days_left} дн"
+
+            tls_soon.append({"domain": domain_name, "note": note, "badge": badge})
+            if len(tls_soon) >= top_n:
+                break
+
+    # Критично: просто количество уникальных доменов с ошибками в последних N запусков
+    critical_count = len(critical_events)
+
+    result = {
+        "limits": {"top_n": top_n},
+        "thresholds": {"tls_soon_days": tls_soon_days},
+        "kpis": {
+            "total_domains": total_domains,
+            "critical_count": critical_count,
+            "tls_soon_count": len(tls_soon) if tls_soon else 0,
+            "audits_24h": audits_24h,
+        },
+        "recent_domains": recent_domains,
+        "recent_audits": recent_audits,
+        "critical_events": critical_events,
+        "tls_soon": tls_soon,
+        "empty": {
+            "recent_domains": "Доменов пока нет.",
+            "recent_audits": "Нет запусков модулей аудита.",
+            "critical_events": "Критичных событий не найдено.",
+            "tls_soon": "Нет данных по истечению TLS (нужны поля в detail_json TLS-модуля).",
+        },
+    }
+
+    logger.info(
+        "[dashboard] ready: total_domains=%s audits_24h=%s recent_domains=%s recent_audits=%s critical=%s tls_soon=%s",
+        total_domains,
+        audits_24h,
+        len(recent_domains),
+        len(recent_audits),
+        len(critical_events),
+        len(tls_soon),
+    )
+    return result

@@ -437,3 +437,154 @@ tbody tr:last-child td {
 .kvs .v {
     font-family: var(--mono);
 }
+
+/* --- Dashboard ------------------------------------------------------------ */
+
+.dash {
+    margin-top: 18px;
+}
+
+.dash-grid {
+    margin-top: 16px;
+}
+
+.kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+}
+
+@media (max-width: 980px) {
+    .kpi-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+@media (max-width: 520px) {
+    .kpi-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+.kpi {
+    display: block;
+    padding: 14px 16px;
+    text-decoration: none;
+}
+
+.kpi:hover {
+    text-decoration: none;
+    border-color: color-mix(in oklab, var(--accent), var(--border) 65%);
+}
+
+.kpi-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 8px;
+}
+
+.kpi-title {
+    font-weight: 650;
+    font-size: 12px;
+    color: var(--muted);
+    letter-spacing: .2px;
+    text-transform: none;
+}
+
+.kpi-value {
+    font-size: 22px;
+    font-weight: 750;
+    color: var(--text);
+    line-height: 1.1;
+}
+
+.kpi-sub {
+    margin-top: 4px;
+    font-size: 12px;
+    color: var(--muted);
+}
+
+.dash-block {
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 12px;
+    background: color-mix(in oklab, var(--surface), var(--surface-2) 14%);
+}
+
+.dash-block.compact {
+    padding: 10px;
+}
+
+.dash-block-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 10px;
+}
+
+.dash-block-title {
+    font-weight: 650;
+    font-size: 13px;
+}
+
+.dash-block-meta {
+    font-size: 12px;
+    color: var(--muted);
+}
+
+.dash-list {
+    display: grid;
+    gap: 8px;
+}
+
+.dash-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 10px;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    background: color-mix(in oklab, var(--surface), var(--surface-2) 18%);
+    text-decoration: none;
+}
+
+.dash-item:hover {
+    text-decoration: none;
+    background: color-mix(in oklab, var(--surface), var(--surface-2) 26%);
+}
+
+.dash-item-main {
+    min-width: 0;
+}
+
+.dash-item-title {
+    font-weight: 650;
+    font-size: 13px;
+    color: var(--text);
+}
+
+.dash-item-sub {
+    margin-top: 2px;
+    font-size: 12px;
+    color: var(--muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 520px;
+}
+
+.dash-item-right {
+    flex: 0 0 auto;
+}
+
+.dash-empty {
+    padding: 10px;
+    font-size: 12px;
+    color: var(--muted);
+    border: 1px dashed color-mix(in oklab, var(--border), transparent 10%);
+    border-radius: 12px;
+}
