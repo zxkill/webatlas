@@ -33,13 +33,13 @@
             {% if focus %}
             <div class="dash-block">
                 <div class="dash-block-head">
-                    <div class="dash-block-title">{{ focus.title }}</div>
-                    <div class="dash-block-meta">{{ focus.subtitle }}</div>
+                    <div class="dash-block-title">{{ focus["title"] }}</div>
+                    <div class="dash-block-meta">{{ focus["subtitle"] }}</div>
                 </div>
 
                 <div class="dash-list">
-                    {% if focus.items %}
-                        {% for item in focus.items %}
+                    {% if focus["items"] %}
+                        {% for item in focus["items"] %}
                             <a class="dash-item" href="/report/{{ item.domain }}">
                                 <div class="dash-item-main">
                                     <div class="dash-item-title mono">{{ item.domain }}</div>
@@ -51,12 +51,12 @@
                             </a>
                         {% endfor %}
                     {% else %}
-                        <div class="dash-empty">{{ focus.empty_message }}</div>
+                        <div class="dash-empty">{{ focus["empty_message"] }}</div>
                     {% endif %}
                 </div>
 
                 <p class="hint">
-                    Найдено: <strong>{{ focus.count }}</strong>.
+                    Найдено: <strong>{{ focus["count"] }}</strong>.
                     <a href="/domains">Сбросить фильтр</a>
                 </p>
             </div>

@@ -32,8 +32,8 @@ from src.webapp_db import (
     update_module_run,
 )
 from src.audit_modules.availability.availability import AvailabilityCheck, AvailabilityModule
-from src.audit_modules.admin_detect.admin_detect import BitrixAdminCheck
-from src.audit_modules.cms_detect.bitrix_detect import BitrixDetectCheck
+from src.audit_modules.admin_detect.admin_detect import AdminDetectCheck
+from src.audit_modules.cms_detect.module import CmsDetectCheck
 from src.audit_modules.tls_certificate.tls_certificate import TlsCertificateCheck
 
 
@@ -54,8 +54,8 @@ def _cleanup(session) -> None:
     session.query(AdminPanel).delete()
     session.query(ModuleRun).delete()
     session.query(AvailabilityCheck).delete()
-    session.query(BitrixDetectCheck).delete()
-    session.query(BitrixAdminCheck).delete()
+    session.query(CmsDetectCheck).delete()
+    session.query(AdminDetectCheck).delete()
     session.query(TlsCertificateCheck).delete()
     session.query(Check).delete()
     session.query(Cms).delete()
