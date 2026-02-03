@@ -1,16 +1,19 @@
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse
 
 from src.audit_modules.registry import list_modules
 from ..deps import get_session
-from ..services.domains import list_domains_svc, get_domain_report_svc
+from ..services.domains import get_domains_page_payload, get_domain_report_svc
 
 # Новый импорт (добавим функцию ниже в webapp_db.py)
 from src.webapp_db import get_dashboard_data
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -37,18 +40,20 @@ def dashboard(request: Request, session=Depends(get_session)) -> HTMLResponse:
 
 
 @router.get("/domains", response_class=HTMLResponse)
-def domains(request: Request, session=Depends(get_session)) -> HTMLResponse:
+def domains(request: Request, focus: str | None = None, session=Depends(get_session)) -> HTMLResponse:
     """
     Старый экран со списком доменов перенесён на /domains.
     """
     templates = request.app.state.templates
-    domains_rows = list_domains_svc(session)
+    logger.info("UI /domains запрошен: focus=%s", focus)
+    payload = get_domains_page_payload(session, focus=focus)
 
     return templates.TemplateResponse(
         "domains.html",
         {
             "request": request,
-            "domains": domains_rows,
+            "domains": payload["domains"],
+            "focus": payload["focus"],
             "modules": list_modules(),
             "page": {"title": "WebAtlas — домены", "subtitle": "Домены и действия"},
         },

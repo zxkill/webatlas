@@ -29,6 +29,40 @@
                 </form>
             </div>
 
+            {# Блок "фокуса" показывает данные, по которым пользователь перешёл с главной страницы. #}
+            {% if focus %}
+            <div class="dash-block">
+                <div class="dash-block-head">
+                    <div class="dash-block-title">{{ focus.title }}</div>
+                    <div class="dash-block-meta">{{ focus.subtitle }}</div>
+                </div>
+
+                <div class="dash-list">
+                    {% if focus.items %}
+                        {% for item in focus.items %}
+                            <a class="dash-item" href="/report/{{ item.domain }}">
+                                <div class="dash-item-main">
+                                    <div class="dash-item-title mono">{{ item.domain }}</div>
+                                    <div class="dash-item-sub">{{ item.note }}</div>
+                                </div>
+                                <div class="dash-item-right">
+                                    {{ item.badge|safe }}
+                                </div>
+                            </a>
+                        {% endfor %}
+                    {% else %}
+                        <div class="dash-empty">{{ focus.empty_message }}</div>
+                    {% endif %}
+                </div>
+
+                <p class="hint">
+                    Найдено: <strong>{{ focus.count }}</strong>.
+                    <a href="/domains">Сбросить фильтр</a>
+                </p>
+            </div>
+            {% endif %}
+
+            {# Основная таблица доменов. В режиме фокуса добавляем колонку состояния. #}
             <div class="table-wrap">
                 <table id="domainsTable">
                     <thead>
@@ -36,6 +70,9 @@
                         <th>ID</th>
                         <th>Домен</th>
                         <th>Источник</th>
+                        {% if focus %}
+                        <th>Состояние</th>
+                        {% endif %}
                         <th>Отчёт</th>
                     </tr>
                     </thead>
@@ -46,12 +83,22 @@
                         <td class="mono">{{ d.id }}</td>
                         <td class="mono">{{ d.domain }}</td>
                         <td>{{ d.source }}</td>
+                        {% if focus %}
+                        <td>
+                            <div class="stack" style="gap: 4px;">
+                                <div>{{ d.note or "—" }}</div>
+                                {% if d.badge %}
+                                    {{ d.badge|safe }}
+                                {% endif %}
+                            </div>
+                        </td>
+                        {% endif %}
                         <td><a href="/report/{{ d.domain }}">Открыть</a></td>
                     </tr>
                     {% endfor %}
                     {% else %}
                     <tr>
-                        <td colspan="4">Данных пока нет</td>
+                        <td colspan="{% if focus %}5{% else %}4{% endif %}">Данных пока нет</td>
                     </tr>
                     {% endif %}
                     </tbody>
