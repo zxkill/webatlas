@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import AsyncIterator, Iterable, Optional
 
 from src.audit_modules.registry import get_registry
@@ -98,14 +99,19 @@ async def _audit_stream(
     if concurrency <= 0:
         raise ValueError("settings.app.audit_concurrency must be > 0")
 
+    threadpool_workers = int(settings.app.audit_threadpool_workers)
+    if threadpool_workers <= 0:
+        raise ValueError("settings.app.audit_threadpool_workers must be > 0")
+
     http = HttpClient(
         rps=settings.app.rate_limit_rps,
         total_timeout_s=settings.app.audit_timeout_total,
     )
 
     logger.info(
-        "[audit.stream] start: concurrency=%s rps=%s timeout_total=%ss modules=%s",
+        "[audit.stream] start: concurrency=%s threadpool_workers=%s rps=%s timeout_total=%ss modules=%s",
         concurrency,
+        threadpool_workers,
         settings.app.rate_limit_rps,
         settings.app.audit_timeout_total,
         normalized_module_keys,
@@ -114,62 +120,74 @@ async def _audit_stream(
     # Приводим domains к итератору (важно: не материализуем список).
     it = iter(domains)
 
-    async with http.create_session() as session:
+    # Конфигурируем threadpool на текущем event loop, чтобы asyncio.to_thread
+    # использовал увеличенный пул и не блокировал массовый аудит.
+    loop = asyncio.get_running_loop()
+    executor = ThreadPoolExecutor(max_workers=threadpool_workers)
+    loop.set_default_executor(executor)
+    logger.info("[audit.stream] threadpool configured: workers=%s", threadpool_workers)
 
-        async def _check_one(domain: str) -> tuple[str, ModuleRunSummary]:
-            # Детальный лог — удобно для диагностики “какой домен сейчас пошёл”.
-            t0 = time.monotonic()
-            logger.info("[audit.stream] run domain=%s modules=%s", domain, normalized_module_keys)
-            context = AuditContext(domain=domain, session=session, http=http, config=settings)
-            summary = await run_modules_for_domain(context, normalized_module_keys)
-            dt_ms = int((time.monotonic() - t0) * 1000)
-            logger.info("[audit.stream] done domain=%s duration_ms=%s", domain, dt_ms)
-            return domain, summary
+    try:
+        async with http.create_session() as session:
 
-        in_flight: set[asyncio.Task[tuple[str, ModuleRunSummary]]] = set()
-        produced = 0
+            async def _check_one(domain: str) -> tuple[str, ModuleRunSummary]:
+                # Детальный лог — удобно для диагностики “какой домен сейчас пошёл”.
+                t0 = time.monotonic()
+                logger.info("[audit.stream] run domain=%s modules=%s", domain, normalized_module_keys)
+                context = AuditContext(domain=domain, session=session, http=http, config=settings)
+                summary = await run_modules_for_domain(context, normalized_module_keys)
+                dt_ms = int((time.monotonic() - t0) * 1000)
+                logger.info("[audit.stream] done domain=%s duration_ms=%s", domain, dt_ms)
+                return domain, summary
 
-        def _schedule_next() -> bool:
-            """
-            Пытаемся взять следующий домен из итератора и запланировать задачу.
-            Возвращает True, если задача создана, иначе False (итератор исчерпан).
-            """
-            try:
-                domain = next(it)
-            except StopIteration:
-                return False
+            in_flight: set[asyncio.Task[tuple[str, ModuleRunSummary]]] = set()
+            produced = 0
 
-            # Минимальная “санитарная” нормализация на всякий случай.
-            if isinstance(domain, str):
-                domain = domain.strip().lower()
-            else:
-                logger.warning("[audit.stream] non-string domain skipped: %r", domain)
-                return True  # продолжаем планирование дальше
+            def _schedule_next() -> bool:
+                """
+                Пытаемся взять следующий домен из итератора и запланировать задачу.
+                Возвращает True, если задача создана, иначе False (итератор исчерпан).
+                """
+                try:
+                    domain = next(it)
+                except StopIteration:
+                    return False
 
-            task = asyncio.create_task(_check_one(domain))
-            in_flight.add(task)
-            return True
+                # Минимальная “санитарная” нормализация на всякий случай.
+                if isinstance(domain, str):
+                    domain = domain.strip().lower()
+                else:
+                    logger.warning("[audit.stream] non-string domain skipped: %r", domain)
+                    return True  # продолжаем планирование дальше
 
-        # Заполняем окно.
-        for _ in range(concurrency):
-            if not _schedule_next():
-                break
+                task = asyncio.create_task(_check_one(domain))
+                in_flight.add(task)
+                return True
 
-        # Главный цикл: пока есть что ждать.
-        while in_flight:
-            done, pending = await asyncio.wait(in_flight, return_when=asyncio.FIRST_COMPLETED)
-            in_flight = set(pending)
+            # Заполняем окно.
+            for _ in range(concurrency):
+                if not _schedule_next():
+                    break
 
-            for task in done:
-                domain, summary = await task
-                produced += 1
-                logger.info("[audit.stream] progress: produced=%s in_flight=%s", produced, len(in_flight))
-                yield domain, summary
+            # Главный цикл: пока есть что ждать.
+            while in_flight:
+                done, pending = await asyncio.wait(in_flight, return_when=asyncio.FIRST_COMPLETED)
+                in_flight = set(pending)
 
-                # Дозаполняем окно ровно на 1 (или больше, если в итераторе были не-строки).
-                while len(in_flight) < concurrency:
-                    if not _schedule_next():
-                        break
+                for task in done:
+                    domain, summary = await task
+                    produced += 1
+                    logger.info("[audit.stream] progress: produced=%s in_flight=%s", produced, len(in_flight))
+                    yield domain, summary
+
+                    # Дозаполняем окно ровно на 1 (или больше, если в итераторе были не-строки).
+                    while len(in_flight) < concurrency:
+                        if not _schedule_next():
+                            break
+    finally:
+        # Корректно останавливаем threadpool, чтобы освободить ресурсы.
+        executor.shutdown(wait=True, cancel_futures=False)
+        logger.info("[audit.stream] threadpool shutdown completed")
 
 
 def run_audit_and_persist(
@@ -187,11 +205,59 @@ def run_audit_and_persist(
     """
 
     async def _run() -> int:
+        # Настройки параллельной записи в БД: позволяем сохранять несколько доменов одновременно,
+        # чтобы снизить общий хвост обработки и не блокировать event loop.
+        settings = load_settings()
+        persist_concurrency = int(settings.app.audit_persist_concurrency)
+        if persist_concurrency <= 0:
+            raise ValueError("settings.app.audit_persist_concurrency must be > 0")
+
+        logger.info(
+            "[audit.persist] start: persist_concurrency=%s",
+            persist_concurrency,
+        )
+
+        persist_sem = asyncio.Semaphore(persist_concurrency)
+        saved_lock = asyncio.Lock()
         saved = 0
+        persist_tasks: set[asyncio.Task[None]] = set()
+
+        async def _persist_one(domain: str, summary: ModuleRunSummary) -> None:
+            nonlocal saved
+            # Оборачиваем синхронный persist в threadpool, чтобы не блокировать event loop.
+            async with persist_sem:
+                t0 = time.monotonic()
+                try:
+                    await asyncio.to_thread(_persist_summary, domain, summary, session_factory)
+                except Exception as exc:  # pylint: disable=broad-except
+                    logger.exception("[audit.persist] failed domain=%s err=%s", domain, exc)
+                    return
+                dt_ms = int((time.monotonic() - t0) * 1000)
+                async with saved_lock:
+                    saved += 1
+                    current_saved = saved
+                logger.info("[audit.persist] saved=%s domain=%s duration_ms=%s", current_saved, domain, dt_ms)
+
         async for domain, summary in _audit_stream(domains, module_keys=module_keys):
-            _persist_summary(domain, summary, session_factory)
-            saved += 1
-            logger.info("[audit.persist] saved=%s domain=%s", saved, domain)
+            task = asyncio.create_task(_persist_one(domain, summary))
+            persist_tasks.add(task)
+
+            # Ограничиваем накопление незавершённых задач записи.
+            if len(persist_tasks) >= persist_concurrency * 2:
+                done, pending = await asyncio.wait(persist_tasks, return_when=asyncio.FIRST_COMPLETED)
+                persist_tasks = set(pending)
+                for finished in done:
+                    try:
+                        await finished
+                    except Exception as exc:  # pylint: disable=broad-except
+                        logger.exception("[audit.persist] task failed err=%s", exc)
+
+        if persist_tasks:
+            results = await asyncio.gather(*persist_tasks, return_exceptions=True)
+            for result in results:
+                if isinstance(result, Exception):
+                    logger.exception("[audit.persist] task failed err=%s", result)
+
         logger.info("[audit] completed: processed=%s", saved)
         return saved
 

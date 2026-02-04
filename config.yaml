@@ -9,5 +9,7 @@ import:
 
 audit:
   concurrency: 1000                  # параллельность
+  persist_concurrency: 200           # параллельная запись результатов в БД
+  threadpool_workers: 512            # размер threadpool для блокирующих операций (DNS, БД)
   timeouts:
     total: 2                       # секунд, общий таймаут на запрос
