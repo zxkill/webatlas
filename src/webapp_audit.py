@@ -187,11 +187,59 @@ def run_audit_and_persist(
     """
 
     async def _run() -> int:
+        # Настройки параллельной записи в БД: позволяем сохранять несколько доменов одновременно,
+        # чтобы снизить общий хвост обработки и не блокировать event loop.
+        settings = load_settings()
+        persist_concurrency = int(settings.app.audit_persist_concurrency)
+        if persist_concurrency <= 0:
+            raise ValueError("settings.app.audit_persist_concurrency must be > 0")
+
+        logger.info(
+            "[audit.persist] start: persist_concurrency=%s",
+            persist_concurrency,
+        )
+
+        persist_sem = asyncio.Semaphore(persist_concurrency)
+        saved_lock = asyncio.Lock()
         saved = 0
+        persist_tasks: set[asyncio.Task[None]] = set()
+
+        async def _persist_one(domain: str, summary: ModuleRunSummary) -> None:
+            nonlocal saved
+            # Оборачиваем синхронный persist в threadpool, чтобы не блокировать event loop.
+            async with persist_sem:
+                t0 = time.monotonic()
+                try:
+                    await asyncio.to_thread(_persist_summary, domain, summary, session_factory)
+                except Exception as exc:  # pylint: disable=broad-except
+                    logger.exception("[audit.persist] failed domain=%s err=%s", domain, exc)
+                    return
+                dt_ms = int((time.monotonic() - t0) * 1000)
+                async with saved_lock:
+                    saved += 1
+                    current_saved = saved
+                logger.info("[audit.persist] saved=%s domain=%s duration_ms=%s", current_saved, domain, dt_ms)
+
         async for domain, summary in _audit_stream(domains, module_keys=module_keys):
-            _persist_summary(domain, summary, session_factory)
-            saved += 1
-            logger.info("[audit.persist] saved=%s domain=%s", saved, domain)
+            task = asyncio.create_task(_persist_one(domain, summary))
+            persist_tasks.add(task)
+
+            # Ограничиваем накопление незавершённых задач записи.
+            if len(persist_tasks) >= persist_concurrency * 2:
+                done, pending = await asyncio.wait(persist_tasks, return_when=asyncio.FIRST_COMPLETED)
+                persist_tasks = set(pending)
+                for finished in done:
+                    try:
+                        await finished
+                    except Exception as exc:  # pylint: disable=broad-except
+                        logger.exception("[audit.persist] task failed err=%s", exc)
+
+        if persist_tasks:
+            results = await asyncio.gather(*persist_tasks, return_exceptions=True)
+            for result in results:
+                if isinstance(result, Exception):
+                    logger.exception("[audit.persist] task failed err=%s", result)
+
         logger.info("[audit] completed: processed=%s", saved)
         return saved
 

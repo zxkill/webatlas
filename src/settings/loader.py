@@ -32,6 +32,7 @@ class AppSettings:
     import_url_template: str
     audit_concurrency: int
     audit_timeout_total: int
+    audit_persist_concurrency: int
 
 
 @dataclass(frozen=True)
@@ -133,16 +134,23 @@ def load_settings(default_yaml_path: str = "config.yaml") -> Settings:
         logger.error("import.url_template is required in YAML")
         raise KeyError("import.url_template is required")
 
+    persist_concurrency = int(audit.get("persist_concurrency", audit["concurrency"]))
+    if persist_concurrency <= 0:
+        logger.error("audit.persist_concurrency must be > 0")
+        raise ValueError("audit.persist_concurrency must be > 0")
+
     app = AppSettings(
         rate_limit_rps=float(rate["rps"]),
         import_url_template=str(url_template),
         audit_concurrency=int(audit["concurrency"]),
         audit_timeout_total=int(timeouts["total"]),
+        audit_persist_concurrency=persist_concurrency,
     )
 
     logger.info(
-        "Settings loaded: audit_concurrency=%s, timeout_total=%s, port=%s",
+        "Settings loaded: audit_concurrency=%s, persist_concurrency=%s, timeout_total=%s, port=%s",
         app.audit_concurrency,
+        app.audit_persist_concurrency,
         app.audit_timeout_total,
         runtime.app_port,
     )
