@@ -9,5 +9,9 @@ import:
 
 audit:
   concurrency: 1000                  # параллельность
+  persist_concurrency: 200           # параллельная запись результатов в БД
+  threadpool_workers: 128            # размер threadpool для блокирующих задач (DNS/БД)
+  http_pool_limit: 1000              # общий лимит соединений aiohttp
+  http_pool_limit_per_host: 200      # лимит соединений на один домен
   timeouts:
     total: 2                       # секунд, общий таймаут на запрос
