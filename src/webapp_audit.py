@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import AsyncIterator, Iterable, Optional
 
 from src.audit_modules.registry import get_registry
@@ -101,13 +102,17 @@ async def _audit_stream(
     http = HttpClient(
         rps=settings.app.rate_limit_rps,
         total_timeout_s=settings.app.audit_timeout_total,
+        pool_limit=settings.app.audit_http_pool_limit,
+        pool_limit_per_host=settings.app.audit_http_pool_limit_per_host,
     )
 
     logger.info(
-        "[audit.stream] start: concurrency=%s rps=%s timeout_total=%ss modules=%s",
+        "[audit.stream] start: concurrency=%s rps=%s timeout_total=%ss pool_limit=%s per_host=%s modules=%s",
         concurrency,
         settings.app.rate_limit_rps,
         settings.app.audit_timeout_total,
+        settings.app.audit_http_pool_limit,
+        settings.app.audit_http_pool_limit_per_host,
         normalized_module_keys,
     )
 
@@ -187,12 +192,84 @@ def run_audit_and_persist(
     """
 
     async def _run() -> int:
+        # Настройки параллельной записи в БД: позволяем сохранять несколько доменов одновременно,
+        # чтобы снизить общий хвост обработки и не блокировать event loop.
+        settings = load_settings()
+        persist_concurrency = int(settings.app.audit_persist_concurrency)
+        if persist_concurrency <= 0:
+            raise ValueError("settings.app.audit_persist_concurrency must be > 0")
+
+        logger.info(
+            "[audit.persist] start: persist_concurrency=%s",
+            persist_concurrency,
+        )
+
+        persist_sem = asyncio.Semaphore(persist_concurrency)
+        saved_lock = asyncio.Lock()
         saved = 0
-        async for domain, summary in _audit_stream(domains, module_keys=module_keys):
-            _persist_summary(domain, summary, session_factory)
-            saved += 1
-            logger.info("[audit.persist] saved=%s domain=%s", saved, domain)
-        logger.info("[audit] completed: processed=%s", saved)
-        return saved
+        persist_tasks: set[asyncio.Task[None]] = set()
+
+        async def _persist_one(domain: str, summary: ModuleRunSummary) -> None:
+            nonlocal saved
+            # Оборачиваем синхронный persist в threadpool, чтобы не блокировать event loop.
+            async with persist_sem:
+                t0 = time.monotonic()
+                try:
+                    await asyncio.to_thread(_persist_summary, domain, summary, session_factory)
+                except Exception as exc:  # pylint: disable=broad-except
+                    logger.exception("[audit.persist] failed domain=%s err=%s", domain, exc)
+                    return
+                dt_ms = int((time.monotonic() - t0) * 1000)
+                async with saved_lock:
+                    saved += 1
+                    current_saved = saved
+                logger.info("[audit.persist] saved=%s domain=%s duration_ms=%s", current_saved, domain, dt_ms)
+
+        # Настраиваем размер threadpool для блокирующих задач (DNS/БД).
+        executor: ThreadPoolExecutor | None = None
+        try:
+            if settings.app.audit_threadpool_workers > 0:
+                executor = _configure_threadpool(settings.app.audit_threadpool_workers)
+            async for domain, summary in _audit_stream(domains, module_keys=module_keys):
+                task = asyncio.create_task(_persist_one(domain, summary))
+                persist_tasks.add(task)
+
+                # Ограничиваем накопление незавершённых задач записи.
+                if len(persist_tasks) >= persist_concurrency * 2:
+                    done, pending = await asyncio.wait(persist_tasks, return_when=asyncio.FIRST_COMPLETED)
+                    persist_tasks = set(pending)
+                    for finished in done:
+                        try:
+                            await finished
+                        except Exception as exc:  # pylint: disable=broad-except
+                            logger.exception("[audit.persist] task failed err=%s", exc)
+
+            if persist_tasks:
+                results = await asyncio.gather(*persist_tasks, return_exceptions=True)
+                for result in results:
+                    if isinstance(result, Exception):
+                        logger.exception("[audit.persist] task failed err=%s", result)
+
+            logger.info("[audit] completed: processed=%s", saved)
+            return saved
+        finally:
+            if executor is not None:
+                logger.info("[audit.persist] shutdown threadpool")
+                executor.shutdown(wait=True)
 
     return asyncio.run(_run())
+
+
+def _configure_threadpool(max_workers: int) -> ThreadPoolExecutor:
+    """
+    Настраивает общий threadpool для event loop.
+
+    Важно:
+    - Подходит для DNS и синхронных операций записи в БД.
+    - Управляется через audit.threadpool_workers в config.yaml.
+    """
+    loop = asyncio.get_running_loop()
+    executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="audit-worker")
+    loop.set_default_executor(executor)
+    logger.info("[audit.threadpool] configured max_workers=%s", max_workers)
+    return executor

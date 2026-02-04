@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
+import threading
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -57,13 +59,73 @@ class DnsAuditModule:
 
     async def run(self, context: AuditContext) -> ModuleResult:
         """
-        DNS — синхронные запросы (через dnspython). Запускаем их в рамках общего воркера;
-        при необходимости позже вынесем в threadpool. Для MVP оставляем просто и прозрачно.
+        DNS — синхронные запросы (через dnspython), поэтому выполняем их в отдельном потоке.
+        Это критично для высокой параллельности: блокирующие DNS-операции не должны стопорить
+        event loop, иначе аудит доменов будет идти последовательно.
         """
         domain = context.domain
         checked_ts = _now_ts()
 
         logger.info("[dns] start domain=%s ts=%s", domain, checked_ts)
+        logger.info(
+            "[dns] offload blocking DNS workload to threadpool: domain=%s",
+            domain,
+        )
+
+        # Важный момент: все блокирующие DNS-запросы уводим в threadpool,
+        # чтобы не “замораживать” event loop при массовом параллельном аудите.
+        t0 = time.monotonic()
+        try:
+            result = await asyncio.to_thread(self._run_blocking_audit, domain, checked_ts)
+        except Exception as exc:  # pylint: disable=broad-except
+            # Подстраховка на случай непредвиденных ошибок в блокирующем коде.
+            logger.exception("[dns] blocking audit failed domain=%s err=%s", domain, exc)
+            evidence = {
+                "domain": domain,
+                "checked_ts": checked_ts,
+                "skipped": True,
+                "reason": "blocking_dns_exception",
+                "error": str(exc),
+            }
+            return ModuleResult(
+                check_updates=[
+                    CheckUpdate(
+                        key=self.key,
+                        description="DNS-аудит завершился ошибкой (blocking thread)",
+                        row=CheckRow(status="no", score=0, evidence_json=_safe_json(evidence)),
+                    )
+                ],
+                module_payload=[
+                    {
+                        "checked_ts": checked_ts,
+                        "resolver_name": "system",
+                        "rrtype": "META",
+                        "ok": False,
+                        "ttl": None,
+                        "answers_json": None,
+                        "error": "blocking_dns_exception",
+                        "evidence_json": _safe_json(evidence),
+                    }
+                ],
+            )
+
+        dt_ms = int((time.monotonic() - t0) * 1000)
+        logger.info("[dns] done domain=%s duration_ms=%s", domain, dt_ms)
+        return result
+
+    def _run_blocking_audit(self, domain: str, checked_ts: int) -> ModuleResult:
+        """
+        Основная синхронная логика DNS-аудита.
+
+        Важно:
+        - Выполняется в отдельном потоке.
+        - Должна оставаться максимально детерминированной и “прозрачной” для логов.
+        """
+        logger.info(
+            "[dns] blocking thread started: domain=%s thread_id=%s",
+            domain,
+            threading.get_ident(),
+        )
 
         # --- Пытаемся импортировать dnspython. Без неё модуль вежливо пропускается.
         try:

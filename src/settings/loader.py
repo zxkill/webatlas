@@ -32,6 +32,10 @@ class AppSettings:
     import_url_template: str
     audit_concurrency: int
     audit_timeout_total: int
+    audit_persist_concurrency: int
+    audit_threadpool_workers: int
+    audit_http_pool_limit: int
+    audit_http_pool_limit_per_host: int
 
 
 @dataclass(frozen=True)
@@ -133,16 +137,45 @@ def load_settings(default_yaml_path: str = "config.yaml") -> Settings:
         logger.error("import.url_template is required in YAML")
         raise KeyError("import.url_template is required")
 
+    persist_concurrency = int(audit.get("persist_concurrency", audit["concurrency"]))
+    if persist_concurrency <= 0:
+        logger.error("audit.persist_concurrency must be > 0")
+        raise ValueError("audit.persist_concurrency must be > 0")
+
+    threadpool_workers = int(audit.get("threadpool_workers", 0))
+    if threadpool_workers < 0:
+        logger.error("audit.threadpool_workers must be >= 0")
+        raise ValueError("audit.threadpool_workers must be >= 0")
+
+    http_pool_limit = int(audit.get("http_pool_limit", 200))
+    if http_pool_limit <= 0:
+        logger.error("audit.http_pool_limit must be > 0")
+        raise ValueError("audit.http_pool_limit must be > 0")
+
+    http_pool_limit_per_host = int(audit.get("http_pool_limit_per_host", 40))
+    if http_pool_limit_per_host <= 0:
+        logger.error("audit.http_pool_limit_per_host must be > 0")
+        raise ValueError("audit.http_pool_limit_per_host must be > 0")
+
     app = AppSettings(
         rate_limit_rps=float(rate["rps"]),
         import_url_template=str(url_template),
         audit_concurrency=int(audit["concurrency"]),
         audit_timeout_total=int(timeouts["total"]),
+        audit_persist_concurrency=persist_concurrency,
+        audit_threadpool_workers=threadpool_workers,
+        audit_http_pool_limit=http_pool_limit,
+        audit_http_pool_limit_per_host=http_pool_limit_per_host,
     )
 
     logger.info(
-        "Settings loaded: audit_concurrency=%s, timeout_total=%s, port=%s",
+        "Settings loaded: audit_concurrency=%s, persist_concurrency=%s, threadpool_workers=%s, "
+        "http_pool_limit=%s, http_pool_limit_per_host=%s, timeout_total=%s, port=%s",
         app.audit_concurrency,
+        app.audit_persist_concurrency,
+        app.audit_threadpool_workers,
+        app.audit_http_pool_limit,
+        app.audit_http_pool_limit_per_host,
         app.audit_timeout_total,
         runtime.app_port,
     )
