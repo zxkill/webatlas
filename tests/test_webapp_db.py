@@ -1,4 +1,5 @@
 import os
+import time
 import pytest
 
 # Пропускаем тест, если SQLAlchemy не установлен (например, в офлайн окружении).
@@ -19,6 +20,8 @@ from src.webapp_db import (
     create_db_state,
     create_domain,
     domains_staging_table,
+    get_dashboard_data,
+    get_domains_focus_data,
     get_domain_report,
     import_domains_from_file,
     init_db,
@@ -29,8 +32,8 @@ from src.webapp_db import (
     update_module_run,
 )
 from src.audit_modules.availability.availability import AvailabilityCheck, AvailabilityModule
-from src.audit_modules.admin_detect.admin_detect import BitrixAdminCheck
-from src.audit_modules.cms_detect.bitrix_detect import BitrixDetectCheck
+from src.audit_modules.admin_detect.admin_detect import AdminDetectCheck
+from src.audit_modules.cms_detect.module import CmsDetectCheck
 from src.audit_modules.tls_certificate.tls_certificate import TlsCertificateCheck
 
 
@@ -51,8 +54,8 @@ def _cleanup(session) -> None:
     session.query(AdminPanel).delete()
     session.query(ModuleRun).delete()
     session.query(AvailabilityCheck).delete()
-    session.query(BitrixDetectCheck).delete()
-    session.query(BitrixAdminCheck).delete()
+    session.query(CmsDetectCheck).delete()
+    session.query(AdminDetectCheck).delete()
     session.query(TlsCertificateCheck).delete()
     session.query(Check).delete()
     session.query(Cms).delete()
@@ -137,3 +140,101 @@ def test_webapp_db_import_from_file(tmp_path):
     assert stats.total_lines == 3
     assert stats.unique_domains == 2
     assert len(domains) == 2
+
+
+def test_webapp_db_dashboard_and_focus_payloads():
+    # Проверяем, что dashboard и focus-данные формируются согласованно.
+    state = create_db_state(_get_test_dsn())
+    init_db(state)
+
+    with state.session_factory() as session:
+        _cleanup(session)
+
+        # Подготовка доменов для тестового набора.
+        create_domain(session, "one.example", source="seed")
+        create_domain(session, "two.example", source="seed")
+        create_domain(session, "three.example", source="seed")
+
+        now_ts = int(time.time())
+
+        # TLS: один домен "скоро", второй — не входит в порог.
+        update_module_run(
+            session,
+            "one.example",
+            ModuleRunRow(
+                module_key="tls_certificate",
+                module_name="TLS",
+                status="success",
+                started_ts=now_ts - 60,
+                finished_ts=now_ts - 30,
+                duration_ms=100,
+                detail_json='{"days_left": 2}',
+            ),
+        )
+        update_module_run(
+            session,
+            "two.example",
+            ModuleRunRow(
+                module_key="tls_certificate",
+                module_name="TLS",
+                status="success",
+                started_ts=now_ts - 120,
+                finished_ts=now_ts - 90,
+                duration_ms=100,
+                detail_json='{"days_left": 30}',
+            ),
+        )
+
+        # Критичное событие для третьего домена.
+        update_module_run(
+            session,
+            "three.example",
+            ModuleRunRow(
+                module_key="availability",
+                module_name="Availability",
+                status="failed",
+                started_ts=now_ts - 300,
+                finished_ts=now_ts - 250,
+                duration_ms=100,
+                detail_json="{}",
+                error_message="timeout",
+            ),
+        )
+
+        # Добавляем аудит за 24 часа, чтобы проверить фокус recent_audits.
+        update_module_run(
+            session,
+            "one.example",
+            ModuleRunRow(
+                module_key="availability",
+                module_name="Availability",
+                status="success",
+                started_ts=now_ts - 10,
+                finished_ts=now_ts - 5,
+                duration_ms=50,
+                detail_json="{}",
+            ),
+        )
+
+        dashboard = get_dashboard_data(session, top_n=5, tls_soon_days=14)
+
+        assert dashboard["kpis"]["total_domains"] == 3
+        assert dashboard["kpis"]["critical_count"] == 1
+        assert dashboard["kpis"]["tls_soon_count"] == 1
+        assert dashboard["tls_soon"][0]["domain"] == "one.example"
+        assert dashboard["critical_events"][0]["domain"] == "three.example"
+
+        focus_critical = get_domains_focus_data(session, focus="critical", tls_soon_days=14)
+        assert focus_critical["focus"]["key"] == "critical"
+        assert focus_critical["focus"]["count"] == 1
+        assert focus_critical["domains"][0]["domain"] == "three.example"
+
+        focus_tls = get_domains_focus_data(session, focus="tls_soon", tls_soon_days=14)
+        assert focus_tls["focus"]["key"] == "tls_soon"
+        assert focus_tls["focus"]["count"] == 1
+        assert focus_tls["domains"][0]["domain"] == "one.example"
+
+        focus_audits = get_domains_focus_data(session, focus="recent_audits", tls_soon_days=14)
+        assert focus_audits["focus"]["key"] == "recent_audits"
+        assert focus_audits["focus"]["count"] >= 1
+        assert focus_audits["domains"][0]["domain"] == "one.example"

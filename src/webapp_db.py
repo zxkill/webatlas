@@ -9,6 +9,7 @@ from sqlalchemy import (
     Column,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Table,
@@ -21,6 +22,16 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, declarative_base, relationship, sessionmaker
 
 from src.utils.domain_import import import_domains_via_copy
+from src.cache import (
+    build_dashboard_cache_key,
+    build_domains_focus_cache_key,
+    build_report_cache_key,
+    cache_get_json,
+    cache_set_json,
+    invalidate_dashboard_cache,
+    invalidate_domain_cache,
+    invalidate_domains_focus_cache,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +50,10 @@ class Domain(Base):
     """Таблица доменов для веб-интерфейса и фоновых задач."""
 
     __tablename__ = "domains"
+    __table_args__ = (
+        # Индекс ускоряет фильтрацию и поиск по домену при построении отчётов.
+        Index("ix_domains_domain", "domain"),
+    )
 
     id = Column(Integer, primary_key=True)
     domain = Column(String(255), nullable=False, unique=True)
@@ -68,7 +83,12 @@ class DomainCheck(Base):
     """Связь домена и проверки с результатами выполнения."""
 
     __tablename__ = "domain_checks"
-    __table_args__ = (UniqueConstraint("domain_id", "check_id", name="uq_domain_check"),)
+    __table_args__ = (
+        UniqueConstraint("domain_id", "check_id", name="uq_domain_check"),
+        # Индекс ускоряет выборки по домену и проверке при построении отчётов.
+        Index("ix_domain_checks_domain_id", "domain_id"),
+        Index("ix_domain_checks_check_id", "check_id"),
+    )
 
     id = Column(Integer, primary_key=True)
     domain_id = Column(Integer, ForeignKey("domains.id"), nullable=False)
@@ -98,7 +118,12 @@ class DomainCms(Base):
     """Связь домена и CMS с результатами определения."""
 
     __tablename__ = "domain_cms"
-    __table_args__ = (UniqueConstraint("domain_id", "cms_id", name="uq_domain_cms"),)
+    __table_args__ = (
+        UniqueConstraint("domain_id", "cms_id", name="uq_domain_cms"),
+        # Индексы ускоряют выборки CMS по домену и справочнику.
+        Index("ix_domain_cms_domain_id", "domain_id"),
+        Index("ix_domain_cms_cms_id", "cms_id"),
+    )
 
     id = Column(Integer, primary_key=True)
     domain_id = Column(Integer, ForeignKey("domains.id"), nullable=False)
@@ -116,7 +141,11 @@ class AdminPanel(Base):
     """Таблица доступности админок для домена."""
 
     __tablename__ = "admin_panels"
-    __table_args__ = (UniqueConstraint("domain_id", "panel_key", name="uq_admin_panel"),)
+    __table_args__ = (
+        UniqueConstraint("domain_id", "panel_key", name="uq_admin_panel"),
+        # Индекс ускоряет выборку панелей по домену.
+        Index("ix_admin_panels_domain_id", "domain_id"),
+    )
 
     id = Column(Integer, primary_key=True)
     domain_id = Column(Integer, ForeignKey("domains.id"), nullable=False)
@@ -134,6 +163,14 @@ class ModuleRun(Base):
     """Таблица фиксации результатов запуска модулей аудита."""
 
     __tablename__ = "module_runs"
+    __table_args__ = (
+        # Индексы нужны для быстрых выборок в dashboard и отчётах.
+        Index("ix_module_runs_domain_id", "domain_id"),
+        Index("ix_module_runs_module_key", "module_key"),
+        Index("ix_module_runs_started_ts", "started_ts"),
+        Index("ix_module_runs_finished_ts", "finished_ts"),
+        Index("ix_module_runs_status", "status"),
+    )
 
     id = Column(Integer, primary_key=True)
     domain_id = Column(Integer, ForeignKey("domains.id"), nullable=False)
@@ -252,6 +289,7 @@ def create_domain(session: Session, domain: str, source: str = "manual", *, comm
         existing.updated_at = func.now()
         if commit:
             session.commit()
+        _invalidate_domain_related_cache(normalized)
         return existing
 
     record = Domain(domain=normalized, source=source)
@@ -261,6 +299,7 @@ def create_domain(session: Session, domain: str, source: str = "manual", *, comm
     logger.info("Создан новый домен: %s", normalized)
     if commit:
         session.commit()
+    _invalidate_domain_related_cache(normalized)
     return record
 
 
@@ -286,6 +325,7 @@ def _get_or_create_domain(session: Session, domain: str, *, commit: bool = True)
     session.refresh(record)
     if commit:
         session.commit()
+    _invalidate_domain_related_cache(normalized)
     return record
 
 
@@ -373,6 +413,7 @@ def update_check(
     if commit:
         session.commit()
     logger.info("Обновлён результат проверки %s для домена %s", check_key, domain)
+    _invalidate_domain_related_cache(domain)
 
 
 def update_admin_panel(
@@ -419,6 +460,7 @@ def update_admin_panel(
     if commit:
         session.commit()
     logger.info("Обновлён статус админки %s для домена %s", panel_key, domain)
+    _invalidate_domain_related_cache(domain)
 
 
 def update_domain_cms(
@@ -465,6 +507,7 @@ def update_domain_cms(
     if commit:
         session.commit()
     logger.info("Обновлена CMS %s для домена %s", cms_key, domain)
+    _invalidate_domain_related_cache(domain)
 
 
 def update_module_run(
@@ -503,6 +546,7 @@ def update_module_run(
         domain,
         row.status,
     )
+    _invalidate_domain_related_cache(domain)
 
 
 def import_domains_from_file(session: Session, path: str, source: str = "file") -> FileImportStats:
@@ -532,6 +576,9 @@ def import_domains_from_file(session: Session, path: str, source: str = "file") 
         stats.inserted_domains,
         stats.skipped_duplicates,
     )
+    # Массовый импорт влияет на виджеты и списки доменов, поэтому сбрасываем агрегаты.
+    invalidate_dashboard_cache()
+    invalidate_domains_focus_cache()
     return stats
 
 
@@ -539,6 +586,12 @@ def get_domain_report(session: Session, domain: str) -> Optional[dict]:
     """Формирует агрегированный отчёт по домену для админки."""
 
     normalized = domain.strip().lower()
+    cache_key = build_report_cache_key(normalized)
+    cached_report = cache_get_json(cache_key)
+    if cached_report is not None:
+        logger.info("Отчёт по домену взят из кэша: %s", normalized)
+        return cached_report
+
     record = session.query(Domain).filter(Domain.domain == normalized).one_or_none()
     if record is None:
         logger.warning("Запрошен отчёт по домену, который не найден: %s", normalized)
@@ -612,6 +665,7 @@ def get_domain_report(session: Session, domain: str) -> Optional[dict]:
         "module_runs": module_runs_payload,
         "module_blocks": module_blocks,
     }
+    cache_set_json(cache_key, report)
     logger.info("Сформирован отчёт по домену: %s", normalized)
     return report
 
@@ -678,6 +732,108 @@ def _safe_json(detail_json: str) -> dict:
         return {}
 
 
+def _extract_tls_days_left(payload: dict, now_ts: int) -> int | None:
+    """
+    Достаёт количество дней до истечения TLS из payload.
+
+    Поддерживаем несколько форматов, чтобы не зависеть от конкретной версии TLS-модуля.
+    """
+
+    # Наиболее прямой вариант — days_left.
+    if isinstance(payload.get("days_left"), int):
+        return payload["days_left"]
+    if isinstance(payload.get("days_left"), str) and payload["days_left"].isdigit():
+        return int(payload["days_left"])
+
+    # Unix timestamp до окончания сертификата.
+    for key in ("not_after_ts", "expires_at_ts"):
+        ts = payload.get(key)
+        if isinstance(ts, int) and ts > 0:
+            return int((ts - now_ts) / 86400)
+
+    # ISO даты — допускаем отсутствие tzinfo и считаем UTC.
+    for key in ("not_after", "expires_at"):
+        value = payload.get(key)
+        if isinstance(value, str) and value:
+            try:
+                dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return int((dt.timestamp() - now_ts) / 86400)
+            except Exception:
+                continue
+    return None
+
+
+def _build_tls_note_badge(days_left: int) -> tuple[str, str]:
+    """
+    Формирует пояснение и бейдж для TLS в зависимости от срока.
+
+    Возвращает (note, badge_html).
+    """
+
+    if days_left < 0:
+        return f"истёк {abs(days_left)} дн назад", '<span class="pill bad"><span class="dot"></span>expired</span>'
+    if days_left <= 3:
+        return f"осталось {days_left} дн", '<span class="pill bad"><span class="dot"></span>⚠</span>'
+    return f"осталось {days_left} дн", '<span class="pill warn"><span class="dot"></span>soon</span>'
+
+
+def _is_critical_run(run: ModuleRun) -> bool:
+    """
+    Проверяем, относится ли запуск к критичным (ошибки или статус failed).
+    """
+
+    status = (run.status or "").lower()
+    return status in {"failed", "fail", "error", "critical", "bad"} or bool(run.error_message)
+
+
+def _load_recent_runs(session: Session, *, limit: int) -> list[tuple[ModuleRun, Domain]]:
+    """
+    Загружает последние запуски модулей вместе с доменами.
+
+    Это помогает получать "актуальное" состояние без тяжёлых агрегатов.
+    """
+
+    logger.debug("Загружаем последние запуски модулей: limit=%s", limit)
+    return (
+        session.query(ModuleRun, Domain)
+        .join(Domain, Domain.id == ModuleRun.domain_id)
+        .order_by(ModuleRun.id.desc())
+        .limit(limit)
+        .all()
+    )
+
+
+def _format_domain_row(domain: Domain, *, note: str | None = None, badge: str | None = None) -> dict:
+    """
+    Приводим доменную запись к формату, удобному для UI.
+
+    Дополнительные поля note/badge используются в режиме "фокуса".
+    """
+
+    return {
+        "id": domain.id,
+        "domain": domain.domain,
+        "source": domain.source,
+        "note": note,
+        "badge": badge,
+    }
+
+
+def _invalidate_domain_related_cache(domain: str) -> None:
+    """
+    Сбрасывает кэш, который зависит от конкретного домена и агрегатов.
+
+    Вызываем после любых изменений данных, чтобы dashboard/фокусы не отдавали устаревшие данные.
+    """
+
+    logger.info("[cache] invalidate domain related cache: domain=%s", domain)
+    invalidate_domain_cache(domain)
+    invalidate_dashboard_cache()
+    invalidate_domains_focus_cache()
+
+
 def get_dashboard_data(session: Session, *, top_n: int = 5, tls_soon_days: int = 14) -> dict:
     """
     Формирует данные для главного Dashboard.
@@ -696,7 +852,18 @@ def get_dashboard_data(session: Session, *, top_n: int = 5, tls_soon_days: int =
 
     logger.info("[dashboard] build payload: top_n=%s tls_soon_days=%s", top_n, tls_soon_days)
 
+    cache_key = build_dashboard_cache_key(top_n=top_n, tls_soon_days=tls_soon_days)
+    cached_payload = cache_get_json(cache_key)
+    if cached_payload is not None:
+        logger.info("[dashboard] payload from cache: key=%s", cache_key)
+        return cached_payload
+
     total_domains = session.query(func.count(Domain.id)).scalar() or 0
+
+    # Берём достаточно запусков, чтобы надёжно собрать top-списки и KPI.
+    # Увеличиваем лимит пропорционально top_n, чтобы избегать "пустых" блоков.
+    recent_limit = max(top_n * 20, 200)
+    recent_runs = _load_recent_runs(session, limit=recent_limit)
 
     # Последние домены
     recent_domains_rows = (
@@ -720,114 +887,71 @@ def get_dashboard_data(session: Session, *, top_n: int = 5, tls_soon_days: int =
         or 0
     )
 
-    # Последние запуски модулей
-    recent_runs = (
-        session.query(ModuleRun, Domain.domain)
-        .join(Domain, Domain.id == ModuleRun.domain_id)
-        .order_by(ModuleRun.id.desc())
-        .limit(50)  # берём больше, чтобы потом отфильтровать и выбрать top_n уникальных доменов
-        .all()
-    )
-
     # Критические события: ошибки/failed
     critical_events = []
     seen_domains = set()
+    critical_domains = set()
 
-    for run, domain_name in recent_runs:
-        st = (run.status or "").lower()
-        if st in {"failed", "fail", "error", "critical", "bad"} or (run.error_message):
-            if domain_name in seen_domains:
+    for run, domain in recent_runs:
+        if _is_critical_run(run):
+            critical_domains.add(domain.domain)
+            if domain.domain in seen_domains:
                 continue
-            seen_domains.add(domain_name)
+            seen_domains.add(domain.domain)
 
             note = run.error_message or f"{run.module_name} · {run.module_key}"
             badge = _pill_html(run.status)
-            critical_events.append({"domain": domain_name, "note": note, "badge": badge})
+            critical_events.append({"domain": domain.domain, "note": note, "badge": badge})
             if len(critical_events) >= top_n:
                 break
 
     # Последние аудиты: отображаем последние успешные/любые по уникальным доменам
     recent_audits = []
     seen_domains = set()
-    for run, domain_name in recent_runs:
-        if domain_name in seen_domains:
+    for run, domain in recent_runs:
+        if domain.domain in seen_domains:
             continue
-        seen_domains.add(domain_name)
+        seen_domains.add(domain.domain)
 
         note = f"{run.module_name} · {_fmt_ago(run.finished_ts)}"
         badge = _pill_html(run.status)
-        recent_audits.append({"domain": domain_name, "note": note, "badge": badge})
+        recent_audits.append({"domain": domain.domain, "note": note, "badge": badge})
         if len(recent_audits) >= top_n:
             break
 
     # TLS soon: best-effort parsing
     tls_soon = []
-    tls_soon_count = 0
     seen_domains = set()
+    tls_soon_domains = set()
 
     # Соберём кандидаты по module_key, содержащему "tls"
     tls_candidates = []
-    for run, domain_name in recent_runs:
+    for run, domain in recent_runs:
         mk = (run.module_key or "").lower()
         if "tls" not in mk:
             continue
-        tls_candidates.append((run, domain_name))
+        tls_candidates.append((run, domain))
 
-    def _extract_tls_days_left(payload: dict) -> int | None:
-        # наиболее частые варианты
-        if isinstance(payload.get("days_left"), int):
-            return payload["days_left"]
-        if isinstance(payload.get("days_left"), str) and payload["days_left"].isdigit():
-            return int(payload["days_left"])
-
-        # timestamps
-        for k in ("not_after_ts", "expires_at_ts"):
-            ts = payload.get(k)
-            if isinstance(ts, int) and ts > 0:
-                return int((ts - now_ts) / 86400)
-
-        # ISO даты
-        for k in ("not_after", "expires_at"):
-            v = payload.get(k)
-            if isinstance(v, str) and v:
-                try:
-                    # допускаем формат без timezone; считаем UTC
-                    dt = datetime.fromisoformat(v.replace("Z", "+00:00"))
-                    if dt.tzinfo is None:
-                        dt = dt.replace(tzinfo=timezone.utc)
-                    return int((dt.timestamp() - now_ts) / 86400)
-                except Exception:
-                    continue
-        return None
-
-    for run, domain_name in tls_candidates:
-        if domain_name in seen_domains:
-            continue
-        seen_domains.add(domain_name)
-
+    for run, domain in tls_candidates:
         payload = _safe_json(run.detail_json)
-        days_left = _extract_tls_days_left(payload)
+        days_left = _extract_tls_days_left(payload, now_ts)
         if days_left is None:
             continue
 
-        tls_soon_count += 1
         if days_left <= tls_soon_days:
-            if days_left < 0:
-                badge = '<span class="pill bad"><span class="dot"></span>expired</span>'
-                note = f"истёк {abs(days_left)} дн назад"
-            elif days_left <= 3:
-                badge = '<span class="pill bad"><span class="dot"></span>⚠</span>'
-                note = f"осталось {days_left} дн"
-            else:
-                badge = '<span class="pill warn"><span class="dot"></span>soon</span>'
-                note = f"осталось {days_left} дн"
+            tls_soon_domains.add(domain.domain)
 
-            tls_soon.append({"domain": domain_name, "note": note, "badge": badge})
+            if domain.domain in seen_domains:
+                continue
+            seen_domains.add(domain.domain)
+
+            note, badge = _build_tls_note_badge(days_left)
+            tls_soon.append({"domain": domain.domain, "note": note, "badge": badge})
             if len(tls_soon) >= top_n:
-                break
+                continue
 
-    # Критично: просто количество уникальных доменов с ошибками в последних N запусков
-    critical_count = len(critical_events)
+    # Критично: количество уникальных доменов с ошибками в последних N запусков
+    critical_count = len(critical_domains)
 
     result = {
         "limits": {"top_n": top_n},
@@ -835,7 +959,7 @@ def get_dashboard_data(session: Session, *, top_n: int = 5, tls_soon_days: int =
         "kpis": {
             "total_domains": total_domains,
             "critical_count": critical_count,
-            "tls_soon_count": len(tls_soon) if tls_soon else 0,
+            "tls_soon_count": len(tls_soon_domains),
             "audits_24h": audits_24h,
         },
         "recent_domains": recent_domains,
@@ -859,4 +983,135 @@ def get_dashboard_data(session: Session, *, top_n: int = 5, tls_soon_days: int =
         len(critical_events),
         len(tls_soon),
     )
+    cache_set_json(cache_key, result)
+    return result
+
+
+def get_domains_focus_data(
+    session: Session,
+    *,
+    focus: str | None = None,
+    limit: int = 100,
+    top_n: int = 50,
+    tls_soon_days: int = 14,
+) -> dict:
+    """
+    Возвращает данные для страницы доменов с учётом "фокуса".
+
+    Фокус — это быстрый фильтр для переходов с главного экрана.
+    """
+
+    allowed_focus = {"critical", "tls_soon", "recent_audits"}
+    normalized_focus = focus if focus in allowed_focus else None
+    cache_key = build_domains_focus_cache_key(
+        focus=normalized_focus,
+        limit=limit,
+        top_n=top_n,
+        tls_soon_days=tls_soon_days,
+    )
+    cached_payload = cache_get_json(cache_key)
+    if cached_payload is not None:
+        logger.info("[domains] focus payload from cache: key=%s", cache_key)
+        return cached_payload
+    logger.info(
+        "[domains] build focus payload: focus=%s limit=%s top_n=%s tls_soon_days=%s",
+        normalized_focus,
+        limit,
+        top_n,
+        tls_soon_days,
+    )
+
+    if not normalized_focus:
+        # Без фокуса показываем последние домены как есть.
+        domains_rows = list_domains(session, limit)
+        payload = [_format_domain_row(domain) for domain in domains_rows]
+        logger.debug("[domains] focus not set, rows=%s", len(payload))
+        result = {"domains": payload, "focus": None}
+        cache_set_json(cache_key, result)
+        return result
+
+    # Загружаем последние запуски модулей для построения "актуальных" списков.
+    recent_limit = max(top_n * 20, 200)
+    recent_runs = _load_recent_runs(session, limit=recent_limit)
+    now_ts = int(time.time())
+
+    focus_items: list[dict] = []
+    focus_set: set[str] = set()
+
+    focus_title = ""
+    focus_subtitle = ""
+    focus_empty = "Нет данных по выбранному фильтру."
+
+    if normalized_focus == "critical":
+        focus_title = "Критичные домены"
+        focus_subtitle = "Домены с ошибками в последних запусках модулей."
+
+        for run, domain in recent_runs:
+            if not _is_critical_run(run):
+                continue
+            if domain.domain in focus_set:
+                continue
+            focus_set.add(domain.domain)
+
+            note = run.error_message or f"{run.module_name} · {run.module_key}"
+            badge = _pill_html(run.status)
+            focus_items.append(_format_domain_row(domain, note=note, badge=badge))
+            if len(focus_items) >= top_n:
+                break
+
+    if normalized_focus == "tls_soon":
+        focus_title = f"TLS ≤ {tls_soon_days} дней"
+        focus_subtitle = "Доменам потребуется продление сертификата."
+
+        for run, domain in recent_runs:
+            mk = (run.module_key or "").lower()
+            if "tls" not in mk:
+                continue
+            payload = _safe_json(run.detail_json)
+            days_left = _extract_tls_days_left(payload, now_ts)
+            if days_left is None or days_left > tls_soon_days:
+                continue
+            if domain.domain in focus_set:
+                continue
+            focus_set.add(domain.domain)
+
+            note, badge = _build_tls_note_badge(days_left)
+            focus_items.append(_format_domain_row(domain, note=note, badge=badge))
+            if len(focus_items) >= top_n:
+                break
+
+    if normalized_focus == "recent_audits":
+        focus_title = "Аудиты за 24 часа"
+        focus_subtitle = "Домены с последними запусками аудита."
+        ts_24h = now_ts - 24 * 3600
+
+        for run, domain in recent_runs:
+            if run.finished_ts < ts_24h:
+                continue
+            if domain.domain in focus_set:
+                continue
+            focus_set.add(domain.domain)
+
+            note = f"{run.module_name} · {_fmt_ago(run.finished_ts)}"
+            badge = _pill_html(run.status)
+            focus_items.append(_format_domain_row(domain, note=note, badge=badge))
+            if len(focus_items) >= top_n:
+                break
+
+    focus_payload = {
+        "key": normalized_focus,
+        "title": focus_title,
+        "subtitle": focus_subtitle,
+        "count": len(focus_items),
+        "items": focus_items,
+        "empty_message": focus_empty,
+    }
+    logger.info(
+        "[domains] focus ready: key=%s items=%s recent_limit=%s",
+        normalized_focus,
+        len(focus_items),
+        recent_limit,
+    )
+    result = {"domains": focus_items, "focus": focus_payload}
+    cache_set_json(cache_key, result)
     return result
