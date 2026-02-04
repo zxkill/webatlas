@@ -9,6 +9,7 @@ from sqlalchemy import (
     Column,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Table,
@@ -49,6 +50,10 @@ class Domain(Base):
     """Таблица доменов для веб-интерфейса и фоновых задач."""
 
     __tablename__ = "domains"
+    __table_args__ = (
+        # Индекс ускоряет фильтрацию и поиск по домену при построении отчётов.
+        Index("ix_domains_domain", "domain"),
+    )
 
     id = Column(Integer, primary_key=True)
     domain = Column(String(255), nullable=False, unique=True)
@@ -78,7 +83,12 @@ class DomainCheck(Base):
     """Связь домена и проверки с результатами выполнения."""
 
     __tablename__ = "domain_checks"
-    __table_args__ = (UniqueConstraint("domain_id", "check_id", name="uq_domain_check"),)
+    __table_args__ = (
+        UniqueConstraint("domain_id", "check_id", name="uq_domain_check"),
+        # Индекс ускоряет выборки по домену и проверке при построении отчётов.
+        Index("ix_domain_checks_domain_id", "domain_id"),
+        Index("ix_domain_checks_check_id", "check_id"),
+    )
 
     id = Column(Integer, primary_key=True)
     domain_id = Column(Integer, ForeignKey("domains.id"), nullable=False)
@@ -108,7 +118,12 @@ class DomainCms(Base):
     """Связь домена и CMS с результатами определения."""
 
     __tablename__ = "domain_cms"
-    __table_args__ = (UniqueConstraint("domain_id", "cms_id", name="uq_domain_cms"),)
+    __table_args__ = (
+        UniqueConstraint("domain_id", "cms_id", name="uq_domain_cms"),
+        # Индексы ускоряют выборки CMS по домену и справочнику.
+        Index("ix_domain_cms_domain_id", "domain_id"),
+        Index("ix_domain_cms_cms_id", "cms_id"),
+    )
 
     id = Column(Integer, primary_key=True)
     domain_id = Column(Integer, ForeignKey("domains.id"), nullable=False)
@@ -126,7 +141,11 @@ class AdminPanel(Base):
     """Таблица доступности админок для домена."""
 
     __tablename__ = "admin_panels"
-    __table_args__ = (UniqueConstraint("domain_id", "panel_key", name="uq_admin_panel"),)
+    __table_args__ = (
+        UniqueConstraint("domain_id", "panel_key", name="uq_admin_panel"),
+        # Индекс ускоряет выборку панелей по домену.
+        Index("ix_admin_panels_domain_id", "domain_id"),
+    )
 
     id = Column(Integer, primary_key=True)
     domain_id = Column(Integer, ForeignKey("domains.id"), nullable=False)
@@ -144,6 +163,14 @@ class ModuleRun(Base):
     """Таблица фиксации результатов запуска модулей аудита."""
 
     __tablename__ = "module_runs"
+    __table_args__ = (
+        # Индексы нужны для быстрых выборок в dashboard и отчётах.
+        Index("ix_module_runs_domain_id", "domain_id"),
+        Index("ix_module_runs_module_key", "module_key"),
+        Index("ix_module_runs_started_ts", "started_ts"),
+        Index("ix_module_runs_finished_ts", "finished_ts"),
+        Index("ix_module_runs_status", "status"),
+    )
 
     id = Column(Integer, primary_key=True)
     domain_id = Column(Integer, ForeignKey("domains.id"), nullable=False)
