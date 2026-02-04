@@ -46,6 +46,7 @@ def test_run_audit_and_persist_uses_threadpool(monkeypatch) -> None:
             audit_concurrency=2,
             audit_timeout_total=1,
             audit_persist_concurrency=2,
+            audit_threadpool_workers=8,
         ),
     )
 

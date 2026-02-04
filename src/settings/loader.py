@@ -33,6 +33,7 @@ class AppSettings:
     audit_concurrency: int
     audit_timeout_total: int
     audit_persist_concurrency: int
+    audit_threadpool_workers: int
 
 
 @dataclass(frozen=True)
@@ -77,6 +78,29 @@ def _require_dict(data: dict, key: str) -> dict:
         logger.error("Config section '%s' is missing or not a dict", key)
         raise KeyError(f"missing section: {key}")
     return v
+
+
+def _resolve_threadpool_workers(audit: dict) -> int:
+    """
+    Рассчитывает размер threadpool для блокирующих операций.
+
+    Логика:
+    - если в YAML указан audit.threadpool_workers, используем его напрямую;
+    - иначе рассчитываем по CPU, чтобы дать максимум параллелизма для I/O;
+    - нижняя граница нужна для массовых аудитов, чтобы пул не был слишком мал.
+    """
+    explicit = audit.get("threadpool_workers")
+    if explicit is not None:
+        workers = int(explicit)
+        logger.info("Threadpool workers configured explicitly: %s", workers)
+        return workers
+
+    cpu_count = os.cpu_count() or 1
+    # Эвристика: 8 потоков на ядро, но не менее 64 и не более 2048.
+    # Это рассчитано на I/O-ориентированные задачи (DNS, БД).
+    workers = max(64, min(2048, cpu_count * 8))
+    logger.info("Threadpool workers derived from CPU: cpu=%s workers=%s", cpu_count, workers)
+    return workers
 
 
 # -----------------------------
@@ -139,18 +163,26 @@ def load_settings(default_yaml_path: str = "config.yaml") -> Settings:
         logger.error("audit.persist_concurrency must be > 0")
         raise ValueError("audit.persist_concurrency must be > 0")
 
+    threadpool_workers = _resolve_threadpool_workers(audit)
+    if threadpool_workers <= 0:
+        logger.error("audit.threadpool_workers must be > 0")
+        raise ValueError("audit.threadpool_workers must be > 0")
+
     app = AppSettings(
         rate_limit_rps=float(rate["rps"]),
         import_url_template=str(url_template),
         audit_concurrency=int(audit["concurrency"]),
         audit_timeout_total=int(timeouts["total"]),
         audit_persist_concurrency=persist_concurrency,
+        audit_threadpool_workers=threadpool_workers,
     )
 
     logger.info(
-        "Settings loaded: audit_concurrency=%s, persist_concurrency=%s, timeout_total=%s, port=%s",
+        "Settings loaded: audit_concurrency=%s, persist_concurrency=%s, threadpool_workers=%s, "
+        "timeout_total=%s, port=%s",
         app.audit_concurrency,
         app.audit_persist_concurrency,
+        app.audit_threadpool_workers,
         app.audit_timeout_total,
         runtime.app_port,
     )
